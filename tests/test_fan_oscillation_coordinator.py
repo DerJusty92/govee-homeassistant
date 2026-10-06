@@ -57,9 +57,7 @@ class TestAsyncSendFanOscillation:
 
         assert await coord.async_send_fan_oscillation(FAN_ID, True) is True
 
-        coord._ble_manager.async_send_fan_oscillation.assert_awaited_once_with(
-            FAN_ID, "H7107", True, TAIL
-        )
+        coord._ble_manager.async_send_fan_oscillation.assert_awaited_once_with(FAN_ID, "H7107", True, TAIL)
         state = coord._states[FAN_ID]
         assert state.oscillating is True
         assert state.source == "optimistic"
@@ -78,9 +76,7 @@ class TestAsyncSendFanOscillation:
         coord = _make_coordinator(mqtt=False)
 
         assert await coord.async_send_fan_oscillation(FAN_ID, False) is True
-        coord._ble_manager.async_send_fan_oscillation.assert_awaited_once_with(
-            FAN_ID, "H7107", False, None
-        )
+        coord._ble_manager.async_send_fan_oscillation.assert_awaited_once_with(FAN_ID, "H7107", False, None)
 
     @pytest.mark.asyncio
     async def test_declined_send_leaves_state_alone(self):

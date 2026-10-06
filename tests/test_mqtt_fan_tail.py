@@ -50,9 +50,7 @@ def _message(
     and a ``state`` dict for the fan's own status push, which carries the
     ``op.command`` list alongside ``state``.
     """
-    encoded = [
-        base64.b64encode(f).decode() if isinstance(f, bytes) else f for f in frames
-    ]
+    encoded = [base64.b64encode(f).decode() if isinstance(f, bytes) else f for f in frames]
     payload: dict = {
         "device": FAN_ID,
         "sku": "H7107",
@@ -117,9 +115,7 @@ class TestFanSwingTailCapture:
         on_state_update = MagicMock()
         client._on_state_update = on_state_update
 
-        await client._handle_message(
-            _message([_aa1d([3, 0x32, 3, 0xE8])], cmd="status", state={"result": 1})
-        )
+        await client._handle_message(_message([_aa1d([3, 0x32, 3, 0xE8])], cmd="status", state={"result": 1}))
 
         assert client.fan_swing_tail(FAN_ID) == [3, 0x32, 3, 0xE8]
         on_state_update.assert_called_once()
@@ -143,9 +139,7 @@ class TestFanSwingTailCapture:
         on_state_update = MagicMock()
         client._on_state_update = on_state_update
 
-        await client._handle_message(
-            _message([None, 42, _aa1d([9, 9, 9, 9])], cmd="status", state={"onOff": 1})
-        )
+        await client._handle_message(_message([None, 42, _aa1d([9, 9, 9, 9])], cmd="status", state={"onOff": 1}))
 
         assert client.fan_swing_tail(FAN_ID) == [9, 9, 9, 9]
         on_state_update.assert_called_once()

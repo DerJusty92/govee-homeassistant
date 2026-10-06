@@ -156,9 +156,7 @@ class TestSegmentTurnOffLogic:
         await entity.async_turn_off()
 
         entity.coordinator.async_control_device.assert_not_called()
-        entity.coordinator.record_segment_color.assert_called_once_with(
-            "AA:BB:CC:DD:EE:FF:00:11", 3, (0, 0, 0)
-        )
+        entity.coordinator.record_segment_color.assert_called_once_with("AA:BB:CC:DD:EE:FF:00:11", 3, (0, 0, 0))
 
     @pytest.mark.asyncio
     async def test_turn_off_records_black_when_command_sent(self):
@@ -166,9 +164,7 @@ class TestSegmentTurnOffLogic:
 
         await entity.async_turn_off()
 
-        entity.coordinator.record_segment_color.assert_called_once_with(
-            "AA:BB:CC:DD:EE:FF:00:11", 3, (0, 0, 0)
-        )
+        entity.coordinator.record_segment_color.assert_called_once_with("AA:BB:CC:DD:EE:FF:00:11", 3, (0, 0, 0))
 
     @pytest.mark.asyncio
     async def test_turn_off_yields_before_flag_check(self):

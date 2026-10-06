@@ -47,9 +47,7 @@ def _h5112(*, tem, hum, tem2, sno=1):
                         },
                     }
                 ),
-                "lastDeviceData": json.dumps(
-                    {"online": False, "tem": tem, "hum": hum, "tem2": tem2}
-                ),
+                "lastDeviceData": json.dumps({"online": False, "tem": tem, "hum": hum, "tem2": tem2}),
             }
         ),
     }
@@ -99,9 +97,7 @@ class TestSecondProbeParsing:
 
     @pytest.mark.asyncio
     async def test_second_probe_sentinel_is_absent_too(self):
-        session = make_session_get(
-            make_mock_response(200, _bff_response([_h5112(tem=2350, hum=4500, tem2=-1)]))
-        )
+        session = make_session_get(make_mock_response(200, _bff_response([_h5112(tem=2350, hum=4500, tem2=-1)])))
         sensor = (await GoveeAuthClient(session=session).fetch_bff_thermo_hygrometers(token="t"))[0]
         assert sensor["temperature_2"] is None
 
@@ -147,7 +143,4 @@ class TestSecondProbeEntity:
 
     def test_distinct_unique_id_from_probe_one(self):
         """Sharing a unique_id would make HA drop one of the two entities."""
-        assert (
-            GoveeSecondProbeTemperatureSensor._attr_translation_key
-            != GoveeTemperatureSensor._attr_translation_key
-        )
+        assert GoveeSecondProbeTemperatureSensor._attr_translation_key != GoveeTemperatureSensor._attr_translation_key

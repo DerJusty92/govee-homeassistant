@@ -21,9 +21,7 @@ def _entry(options, snapshot):
     coordinator = SimpleNamespace()
     if snapshot is not None:
         coordinator.options_snapshot = snapshot
-    return SimpleNamespace(
-        options=options, runtime_data=coordinator, entry_id="e1", title="Govee"
-    )
+    return SimpleNamespace(options=options, runtime_data=coordinator, entry_id="e1", title="Govee")
 
 
 def _hass():

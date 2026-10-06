@@ -23,6 +23,17 @@ CONF_ENABLE_MQTT_CONTROL: Final = "enable_mqtt_control"
 # account API's rate limit is unverified (homebridge issue #543) — users with
 # many detectors may want to back off, while a single detector can poll faster.
 CONF_WATER_DETECTOR_POLL_INTERVAL: Final = "water_detector_poll_interval"
+CONF_PROBE_POLL_INTERVAL: Final = "probe_poll_interval"
+
+# Interval (seconds) for re-querying every MQTT-controlled device's own status
+# over AWS IoT. Reverse-engineering the Govee Android app found that
+# account-topic "status" pushes are overwhelmingly *replies* to an explicit
+# per-device status query the app's device-list screen sends every ~30-60s
+# while it is on screen (`AbsOnlyIotModel.checkIotOnline()`/`Iot.A()`) —
+# devices are not reliably autonomous pushers. Without ever asking, this
+# integration could go quiet the moment the Govee app was closed. Configurable
+# so accounts with many devices can back off from the app's own cadence.
+CONF_MQTT_STATUS_INTERVAL: Final = "mqtt_status_interval"
 
 # Extra LAN discovery targets for devices the local multicast scan can't reach —
 # e.g. Govee devices on a different VLAN/subnet than Home Assistant (issue #57).
@@ -78,6 +89,11 @@ CONF_API_TEMPERATURE_UNIT: Final = "api_temperature_unit"
 #     its location. Developer-API path; the SKU is not in the BFF thermo sets,
 #     so the account's fahOpen preference is never recorded for it and this
 #     entry is the only signal (issue #173).
+#   H5171 (WiFi thermo-hygrometer): same shape as the H5053 — the Developer
+#     API returned `sensorTemperature: 71.06` with no unit field and HA showed
+#     158.6°F, i.e. the °F reading converted a second time. Same path, same
+#     gap: not in the BFF thermo sets, so the model list is its only signal
+#     (issue #173 follow-up).
 FAHRENHEIT_REPORTING_SKUS: Final = frozenset(
     {
         "H5179",
@@ -86,6 +102,7 @@ FAHRENHEIT_REPORTING_SKUS: Final = frozenset(
         "H5110",
         "H5111",
         "H5053",
+        "H5171",
         "HS5108",
         "HS5106",
         "H717A",
@@ -108,6 +125,17 @@ FAHRENHEIT_REPORTING_SKUS: Final = frozenset(
 # the H7108 is unverified — both stay on the REST OscillationCommand, as does
 # every other fan SKU. Compared case-insensitively against GoveeDevice.sku.
 MQTT_OSCILLATION_SKUS: Final = frozenset({"H7105", "H7107"})
+
+
+# Multi-outlet plugs whose Developer API capability list carries only the
+# master powerSwitch (no socketToggle{N}) but whose outlets homebridge-govee
+# drives individually over AWS IoT with a bitmask `turn` value:
+# ((1 << i) << 4) | ((1 << i) if on else 0) — 17/16, 34/32, 68/64 for the
+# three outlets, 119/112 for all (lib/device/switch-triple.js). The public
+# REST API rejects anything other than 0/1 here, so these switches exist only
+# with account login and are optimistic until the plug's own onOff readback
+# is decoded (issue #184). SKU -> outlet count.
+MULTI_OUTLET_MQTT_SKUS: Final = {"H5160": 3, "H5161": 3}
 
 
 # SKU-specific segment count overrides.
@@ -133,9 +161,7 @@ SKU_SEGMENT_OVERRIDES: Final = {
 }
 
 
-def resolve_fahrenheit_conversion(
-    sku: str, api_unit: str, device_unit_hint: str | None = None
-) -> bool:
+def resolve_fahrenheit_conversion(sku: str, api_unit: str, device_unit_hint: str | None = None) -> bool:
     """Whether a Developer-API ``sensor_temperature`` should be treated as °F.
 
     Shared by the sensor entity (which converts °F→°C for display) and the
@@ -159,6 +185,11 @@ def resolve_fahrenheit_conversion(
 
 # Defaults
 DEFAULT_POLL_INTERVAL: Final = 60  # seconds
+# Bounds for the cloud polling interval (seconds). The lower bound keeps a
+# large install inside Govee's 100/min budget; the upper bound keeps state
+# reasonably fresh for devices without a push channel.
+MIN_POLL_INTERVAL: Final = 30
+MAX_POLL_INTERVAL: Final = 300
 DEFAULT_ENABLE_GROUPS: Final = False
 DEFAULT_ENABLE_SCENES: Final = True
 DEFAULT_ENABLE_DIY_SCENES: Final = True
@@ -168,12 +199,72 @@ DEFAULT_ENABLE_MQTT_CONTROL: Final = False
 DEFAULT_API_TEMPERATURE_UNIT: Final = "auto"
 DEFAULT_LAN_TARGETS: Final = ""
 DEFAULT_WATER_DETECTOR_POLL_INTERVAL: Final = 120  # seconds (2 minutes)
+# Probe thermometers are pull devices, so this interval is the entire
+# update rate while cooking. 30 s keeps a roast legible without hammering
+# the device; the poll only runs while its live-polling switch is on.
+DEFAULT_PROBE_POLL_INTERVAL: Final = 30  # seconds
+# Slower than the Govee app's own ~30-60s cadence on purpose: this integration
+# queries every eligible device on every tick (the app only queries whatever
+# is currently on screen), so a lower default would multiply request volume
+# with device count. 5 minutes keeps most devices fresh without that.
+DEFAULT_MQTT_STATUS_INTERVAL: Final = 300  # seconds (5 minutes)
 
 # Bounds for the configurable water-detector poll interval (seconds). The lower
 # bound keeps the unverified account-API rate limit at arm's length; the upper
 # bound (1 hour) is the slowest that still makes a leak alert useful.
 MIN_WATER_DETECTOR_POLL_INTERVAL: Final = 60
 MAX_WATER_DETECTOR_POLL_INTERVAL: Final = 3600
+MIN_PROBE_POLL_INTERVAL: Final = 10
+MAX_PROBE_POLL_INTERVAL: Final = 600
+
+# Govee's documented developer-API quotas. The per-minute figure comes back
+# in response headers; the daily one never does, so it is carried here so
+# the rate-limit sensor can say how much of it an install has spent.
+GOVEE_DAILY_REQUEST_LIMIT: Final = 10000
+# Bounds for the configurable MQTT status-poll interval (seconds). The lower
+# bound matches the fastest cadence observed from the Govee app itself, so
+# this integration can never out-poll what the app already does routinely.
+MIN_MQTT_STATUS_INTERVAL: Final = 60
+MAX_MQTT_STATUS_INTERVAL: Final = 3600
+# Setting the option to this turns the re-query off entirely: no timer, no
+# connect-time sweep, state comes only from what devices push on their own.
+MQTT_STATUS_POLL_OFF: Final = 0
+# Gap (seconds) between two devices' status queries in one sweep. AWS IoT
+# answers a publish it refuses (an unauthorised topic, for instance) by closing
+# the whole session, so a burst of queries to every device could not say which
+# one caused it (issue #195). Paced one per second, a session that drops inside
+# this gap is attributable to the device just queried; a typical round-trip is
+# well under a fifth of that.
+MQTT_STATUS_QUERY_SPACING: Final = 1.0
+# How many times the session has to drop right after querying the same device
+# before that device is quarantined from the sweep. Two, so a coincidental
+# network drop during a sweep does not cost a device its status queries.
+MQTT_STATUS_QUERY_QUARANTINE_STRIKES: Final = 2
+# SKUs left out of the sweep outright, rather than learning the hard way via
+# the quarantine above. Every one here is a BLE/LoRa gateway-bridged sensor
+# (see FAHRENHEIT_REPORTING_SKUS): it has an AWS IoT topic on the account but
+# never answers a direct status-query publish to it, so AWS closes the
+# session every single time.
+#   H5110 (thermo-hygrometer via H5044/H5151): confirmed on real hardware
+#     with three units on one account, each independently burning through
+#     the quarantine strikes on its own reconnect cycle before the session
+#     stabilized (issue #195).
+#   H5220 (thermo-hygrometer, same gateway family): confirmed via diagnostics
+#     with three units on one account, all quarantined, still delaying
+#     stabilization after H5110 alone was excluded (issue #195 follow-up).
+#   H5111 (fridge/freezer thermometer, same BLE-bridged read path as H5110
+#     per its FAHRENHEIT_REPORTING_SKUS entry above): confirmed via
+#     diagnostics showing the identical quarantine signature (issue #197
+#     follow-up).
+#   H5075 (thermo-hygrometer): same class again — BLE-advertising, no network
+#     stack of its own, listed on the account with a topic it never answers.
+#     Confirmed on v2026.9.11 with six units on one account, each taking the
+#     session down on its own reconnect cycle: the sweep at the 300s mark
+#     dropped the session, and the five reconnects that followed died ~1s
+#     after querying the next unit, so MQTT was effectively dead for 30
+#     minutes after every restart while the six burned through their strikes
+#     (issue #195 follow-up).
+MQTT_STATUS_QUERY_EXCLUDED_SKUS: Final = frozenset({"H5110", "H5220", "H5111", "H5075"})
 
 # Optimistic state handling
 # Grace window (seconds) during which API polls do NOT overwrite optimistic
@@ -256,6 +347,13 @@ MAIN_LIGHT_TOGGLE_SKUS: Final = frozenset({"H1270"})
 # remain unverified and are omitted until observed in the wild.
 GOVEE_BLE_MANUFACTURER_IDS: Final = (0x8803,)  # 34819
 
+# Options key holding the per-device segment mode map ({device_id: mode}).
+CONF_SEGMENT_MODE_BY_DEVICE: Final = "segment_mode_by_device"
+
+# Identifier of the integration-level "Govee Integration" device that carries
+# the hub-wide diagnostics (rate limit, MQTT status).
+HUB_DEVICE_IDENTIFIER: Final = "hub"
+
 # Segment mode options
 SEGMENT_MODE_DISABLED: Final = "disabled"
 SEGMENT_MODE_GROUPED: Final = "grouped"
@@ -271,7 +369,6 @@ SEGMENT_MODE_BOTH: Final = "both"
 # moved from hass.data[DOMAIN] to entry.data (see async_migrate_entry).
 CONFIG_VERSION: Final = 2
 
-# Keys for storing cached data in hass.data[DOMAIN]
 # Minimum gap between account re-login attempts after the BFF rejects the
 # stored token (issue #132). Repeated logins are what trips Govee's own 2FA
 # hardening, so a persistently failing account must back off rather than retry
@@ -295,6 +392,7 @@ SUFFIX_REFRESH_SCENES: Final = "_refresh_scenes"
 SUFFIX_NIGHT_LIGHT: Final = "_night_light"
 SUFFIX_LIGHT_ZONE: Final = "_light_zone_"
 SUFFIX_SOCKET: Final = "_socket_"
+SUFFIX_MQTT_OUTLET: Final = "_mqtt_outlet_"
 SUFFIX_MAIN_LIGHT: Final = "_main_light"
 # Distinct from SUFFIX_MAIN_LIGHT (the switch backed by the cloud
 # ``mainLightToggle`` capability) — this is the dedicated main-panel light
@@ -302,6 +400,7 @@ SUFFIX_MAIN_LIGHT: Final = "_main_light"
 SUFFIX_MAIN_LIGHT_TOGGLE: Final = "_main_light_toggle"
 SUFFIX_BACKGROUND_LIGHT: Final = "_background_light"
 SUFFIX_NEBULA_LIGHT: Final = "_nebula_light"
+SUFFIX_RIPPLE_LIGHT: Final = "_ripple_light"
 SUFFIX_SIDE_LIGHT: Final = "_side_light"
 SUFFIX_BOTTOM_LIGHT: Final = "_bottom_light"
 SUFFIX_MUSIC_MODE: Final = "_music_mode"

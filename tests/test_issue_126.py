@@ -110,30 +110,26 @@ class TestSwitchPlatformWiring:
         entry = MagicMock()
         entry.runtime_data = coordinator
         added: list = []
-        await switch_mod.async_setup_entry(
-            MagicMock(), entry, lambda ents: added.extend(ents)
-        )
+        await switch_mod.async_setup_entry(MagicMock(), entry, lambda ents: added.extend(ents))
         return added
 
     @pytest.mark.asyncio
     async def test_h60b3_creates_three_named_light_switches(self):
         added = await self._setup(_h60b3())
-        named = {
-            e._toggle_instance: e
-            for e in added
-            if type(e).__name__ == "GoveeNamedLightSwitchEntity"
-        }
+        named = {e._toggle_instance: e for e in added if type(e).__name__ == "GoveeNamedLightSwitchEntity"}
         assert sorted(named) == [
             "bottomLightToggle",
             "nebulaLightToggle",
             "sideLightToggle",
         ]
-        assert (
-            named["nebulaLightToggle"]._attr_unique_id
-            == "AA:BB:CC:DD:EE:FF:60:B3_nebula_light"
-        )
+        assert named["nebulaLightToggle"]._attr_unique_id == "AA:BB:CC:DD:EE:FF:60:B3_nebula_light"
         assert named["sideLightToggle"]._attr_translation_key == "govee_side_light"
-        assert named["bottomLightToggle"]._attr_icon == "mdi:floor-lamp"
+        assert named["bottomLightToggle"]._attr_translation_key == "govee_bottom_light"
+        import json
+        from pathlib import Path
+
+        icons = json.loads((Path(__file__).resolve().parent.parent / "custom_components/govee/icons.json").read_text())
+        assert icons["entity"]["switch"]["govee_bottom_light"]["default"] == "mdi:floor-lamp"
 
     @pytest.mark.asyncio
     async def test_unknown_named_toggle_skipped(self):

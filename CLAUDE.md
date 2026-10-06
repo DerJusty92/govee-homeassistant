@@ -43,55 +43,67 @@ mypy custom_components/govee
 
 ```
 custom_components/govee/
-├── __init__.py          # Entry point, async_setup_entry
+├── __init__.py          # async_setup (services), async_setup_entry, cleanup, device removal
 ├── config_flow.py       # Config/options/reauth/reconfigure flows
-├── coordinator.py       # DataUpdateCoordinator with MQTT
-├── entity.py            # Base GoveeEntity class
-├── light.py             # Light platform
-├── select.py            # Scene/DIY/HDMI/music mode selectors
-├── switch.py            # Switch platform (plugs, night light, music, DreamView)
-├── sensor.py            # Diagnostic sensors
-├── button.py            # Refresh scenes button
-├── services.py          # Custom services
+├── coordinator.py       # DataUpdateCoordinator (REST poll, MQTT, LAN, BLE, BFF); GoveeConfigEntry
+├── entity.py            # Base GoveeEntity class (device info, availability, _async_send_command)
+├── light.py             # Light platform (main light, nightlight, main panel)
+├── select.py            # Scene/DIY/snapshot/HDMI/music/fan-speed/purifier selects
+├── switch.py            # Plugs, toggles, music mode, DreamView, probe polling
+├── fan.py               # Tower fans and ceiling fans
+├── humidifier.py        # Humidifiers and dehumidifiers
+├── number.py            # Music sensitivity, heater target, probe limits
+├── sensor.py            # Readings and diagnostic sensors
+├── binary_sensor.py     # Connectivity, leak, occupancy, water-tank sensors
+├── event.py             # Leak sensor button presses
+├── button.py            # Refresh scenes, clear water alert
+├── services.py          # Service actions (registered from async_setup)
 ├── repairs.py           # Repairs framework integration
 ├── diagnostics.py       # Diagnostics for troubleshooting
+├── scene_cache.py       # Scene / DIY scene cache with TTL
+├── transport_health.py  # Per-device, per-transport health tracker
+├── ble_advertisement.py # BLE advertisement correlation and enrolment
+├── ble_passthrough.py   # BLE frames tunnelled over AWS IoT
 ├── const.py             # Constants
-├── models/              # Domain models (frozen dataclasses)
-│   ├── device.py        # GoveeDevice, GoveeCapability
+├── icons.json           # Entity icons by translation key
+├── strings.json         # UI strings (mirrored in translations/en.json)
+├── models/              # Domain models (frozen devices/commands, mutable state)
+│   ├── device.py        # GoveeDevice, GoveeCapability, leak sensor models
 │   ├── state.py         # GoveeDeviceState, RGBColor
-│   └── commands.py      # Command pattern implementations
-├── protocols/           # Protocol interfaces (Clean Architecture)
-│   ├── api.py           # IApiClient, IAuthProvider
-│   └── state.py         # IStateProvider, IStateObserver
+│   ├── commands.py      # Command pattern implementations
+│   └── transport.py     # TransportHealth
+├── platforms/           # Segment light entities (individual and grouped)
 └── api/                 # API layer
     ├── client.py        # GoveeApiClient (REST)
-    ├── auth.py          # GoveeAuthClient (account login + 2FA)
+    ├── auth.py          # GoveeAuthClient (account login + 2FA, BFF reads)
     ├── mqtt.py          # GoveeAwsIotClient (AWS IoT MQTT)
+    ├── openapi_events.py# Official event push channel (API key only)
+    ├── lan*.py          # LAN discovery, client, and control mapping
+    ├── ble*.py          # Direct BLE transport, packets, crypto
+    ├── mqtt_control.py  # Native MQTT command mapping
+    ├── probe_thermometer.py # Probe thermometer frames
     └── exceptions.py    # Exception hierarchy
 ```
 
 ## Architecture Patterns
 
-### Clean Architecture
-- **Models**: Immutable frozen dataclasses, no I/O
-- **Protocols**: Abstract interfaces (Python Protocols)
-- **API Layer**: HTTP/MQTT clients, exception handling
-- **Coordinator**: State management, orchestration
-- **Entities**: Home Assistant platform integration
+### Layers
+- **Models**: Devices, capabilities, colors, and commands are frozen dataclasses; `GoveeDeviceState` is mutable and updated in place by the coordinator. No I/O.
+- **API Layer**: HTTP/MQTT/LAN/BLE clients, exception handling
+- **Coordinator**: State management, orchestration, transport selection
+- **Entities**: Home Assistant platform integration (all subclass `GoveeEntity`, a `CoordinatorEntity`)
 
 ### Command Pattern
-Device control uses immutable command objects:
+Device control uses immutable command objects (no device ID inside; the coordinator takes it):
 ```python
-PowerCommand(device_id="xxx", value=True)
-BrightnessCommand(device_id="xxx", value=128)
-ColorCommand(device_id="xxx", value=RGBColor(255, 0, 0))
+await coordinator.async_control_device(device_id, PowerCommand(power_on=True))
+await coordinator.async_control_device(device_id, BrightnessCommand(brightness=50))
+await coordinator.async_control_device(device_id, ColorCommand(color=RGBColor(255, 0, 0)))
 ```
+`async_control_device` returns `False` when Govee rejects the command. Entities must not swallow that: call `self._async_send_command(command)` (raises a translated `HomeAssistantError`) or `raise self._command_failed()` for other coordinator methods that return a bool. Invalid user input raises `ServiceValidationError` with a key from the `exceptions` block of `strings.json`.
 
-### Observer Pattern
-Entities register as observers for state changes:
-```python
-coordinator.register_observer(device_id, entity)
-```
+### Coordinator updates
+Entities are `CoordinatorEntity` subscribers. Push paths (MQTT, LAN, BLE) call `coordinator.async_set_updated_data` only when a value changed; the BLE advertisement handler uses `async_update_listeners` so it never reschedules the poll.
 
 ## Key Components
 
@@ -117,7 +129,8 @@ Account login for MQTT credentials:
 - Verification: `/account/rest/account/v1/verification` with `{"type": 8, "email": "..."}`
 - Retry login with `"code"` field -> returns token + IoT certs
 - App version must be `7.4.10` with matching User-Agent
-- IoT credentials cached in `hass.data` to survive entry reloads
+- IoT credentials are persisted in `entry.data` (config entry schema v2) to survive entry reloads
+- Never log the account email, password, token, or certificates
 
 ### GoveeAwsIotClient
 MQTT client for real-time updates:
@@ -128,22 +141,17 @@ MQTT client for real-time updates:
 
 ## Testing
 
-| File | Tests | Focus |
-|------|-------|-------|
-| test_models.py | 50 | RGBColor, Device, State, Commands |
-| test_config_flow.py | 55 | Config, options, reauth, reconfigure, 2FA |
-| test_coordinator.py | 32 | Observer pattern, commands, state |
-| test_api_client.py | 28 | Exceptions, client, rate limits |
-| test_auth.py | 54 | Login, 2FA, headers, IoT key, P12 |
-| **Total** | **535+** | |
+About 3,250 tests across 92 files (`pytest --co -q | tail -1` for the current count). Most are unit tests on entities and the coordinator built with `MagicMock`; the `tests/test_cov_<module>.py` files close each module's remaining branches. `tests/test_setup_entry*.py`, `tests/test_config_flow_manager*.py`, and `tests/test_repairs.py` drive the real config entry, flow manager, and repair flows with `MockConfigEntry`. Prefer that style for anything that touches registries, setup, or flow steps.
 
 ## Code Style
 
-- **Formatting**: Black (line length 119)
-- **Linting**: Flake8
-- **Types**: mypy strict mode
+- **Formatting**: Black (line length 119, configured in `pyproject.toml`); CI runs `black --check`, so run `black .` before committing
+- **Linting**: Flake8 (configured in setup.cfg)
+- **Types**: mypy strict mode; use `GoveeConfigEntry` for the config entry type
 - **Docstrings**: Google style
-- **Coverage**: 95% minimum
+- **Coverage**: 95% floor (tox and .coveragerc); 99.9% measured, every module above 96%; config_flow.py must stay at 100%
+- **Logging**: `%s` formatting, no trailing period, no usernames/emails/tokens; info level only for things the user must act on
+- **Names and icons**: every entity has `_attr_translation_key`; names live in `strings.json` and icons in `icons.json`, never `_attr_name`/`_attr_icon`
 
 ## Common Tasks
 
@@ -157,8 +165,13 @@ MQTT client for real-time updates:
 1. Add command class to `models/commands.py`
 2. Implement in `api/client.py`
 3. Add coordinator method
-4. Add entity method
+4. Add entity method that raises on failure (`_async_send_command`)
 5. Add tests
+
+### Add a service action
+1. Add the handler to `services.py` and register it in `async_setup_services` (called from `async_setup`, never per entry)
+2. Validate input with `ServiceValidationError`; resolve `device_id` through `_get_coordinator_for_device`
+3. Add the `services.yaml` fields and the `services` and `exceptions` strings
 
 ### Handle a new error type
 1. Add exception to `api/exceptions.py`
@@ -171,9 +184,10 @@ MQTT client for real-time updates:
 - All I/O must be async
 - Use `asyncio.gather()` for parallel operations
 - Entities inherit from `GoveeEntity` base class
-- Coordinator manages all state - entities are observers
-- MQTT is optional - polling is the fallback
+- Coordinator manages all state - entities are `CoordinatorEntity` subscribers
+- MQTT is optional - polling is the fallback; a total cloud outage raises `UpdateFailed` so entities go unavailable
 - Rate limits: 100/min, 10,000/day
+- Orphan cleanup (`__init__.py`) only removes entities of devices missing from a complete discovery; leak sensors, hubs, and the `hub` diagnostics device are protected, and `async_remove_config_entry_device` covers manual deletion
 
 ## 2FA Authentication Flow
 
@@ -188,7 +202,7 @@ Govee requires email verification (2FA) for account login since March 2026.
 - `async_step_account()` catches `Govee2FARequiredError` -> triggers code send -> `async_step_verification_code()`
 - Same flow in `async_step_reconfigure()`
 - `client_id` (UUID hex) must be generated BEFORE the first login and reused across all steps
-- IoT credentials from config flow are pre-cached in `hass.data[DOMAIN][KEY_IOT_CREDENTIALS]` so the entry reload finds them (avoids re-login hitting 2FA again)
+- IoT credentials obtained in the config flow are written to `entry.data[KEY_IOT_CREDENTIALS]` (schema v2) so the entry reload finds them (avoids re-login hitting 2FA again); nothing is kept in `hass.data` at runtime
 
 ### Startup Behavior
 - `Govee2FARequiredError` at startup -> log warning, record failure, create repairs issue, continue polling-only
@@ -254,7 +268,7 @@ For SKUs the API over-reports (H7075: `elementRange.max=14`, device has 3 sectio
 - **Limitation**: API returns empty strings for segment colors
 - **Solution**: Segment entities use local optimistic state + `RestoreEntity`
 - **Clear when**: Never (persists across restarts via HA state machine)
-- **Implementation**: `platforms/segment.py` does NOT subscribe to coordinator updates
+- **Implementation**: `platforms/segment.py` keeps the colours in the entity; coordinator updates only re-render availability, and the grouped entity broadcasts its writes over a per-device dispatcher signal
 
 ### Pattern
 For API values that aren't reliably returned:
@@ -287,12 +301,13 @@ for cap in device.capabilities:
 ### Options schema (config_flow.py)
 Options are defined in `GoveeOptionsFlow.async_step_init()`:
 ```python
-vol.Optional(CONF_POLL_INTERVAL, default=...): vol.All(vol.Coerce(int), vol.Range(min=30, max=600)),
+vol.Optional(CONF_POLL_INTERVAL, default=...): vol.All(vol.Coerce(int), vol.Range(min=30, max=300)),
 vol.Optional(CONF_ENABLE_GROUPS, default=...): bool,
 vol.Optional(CONF_ENABLE_SCENES, default=...): bool,
 vol.Optional(CONF_ENABLE_DIY_SCENES, default=...): bool,
-vol.Optional(CONF_ENABLE_SEGMENTS, default=...): bool,
+vol.Optional(CONF_API_TEMPERATURE_UNIT, default=...): SelectSelector(...),  # options translated via the selector block
 ```
+Per-device segment modes are stored under `CONF_SEGMENT_MODE_BY_DEVICE`. Enumerated options use `SelectSelector` with a `translation_key` so their labels come from the `selector` block of `strings.json`.
 
 ### Translations
 Update both files when changing option labels:
@@ -303,19 +318,6 @@ Update both files when changing option labels:
 
 1. **Bump version** in `manifest.json` (CalVer: `YYYY.MM.patch`)
 2. **Commit**: `git add -A && git commit -m "message"`
-3. **Push**: `git push origin master`
+3. **Push**: `git push origin main`
 4. **Wait for CI**: Check with `gh run list --limit 5`
 5. **Create release**: `gh release create vYYYY.MM.patch --title "vYYYY.MM.patch" --notes "..."`
-
-## Directory Updates
-
-The project structure has evolved:
-```
-custom_components/govee/
-├── select.py            # Scene selector dropdowns (replaced scene.py)
-├── platforms/
-│   └── segment.py       # RGBIC segment light entities
-```
-
-- **select.py**: One dropdown per device for scene selection
-- **segment.py**: Individual light entities for each RGBIC segment

@@ -83,9 +83,7 @@ def _h1310() -> GoveeDevice:
             ),
             GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_REVERSE_AIRFLOW, parameters=toggle),
             GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_MAIN_LIGHT_TOGGLE, parameters=toggle),
-            GoveeCapability(
-                type=CAPABILITY_TOGGLE, instance=INSTANCE_BACKGROUND_LIGHT_TOGGLE, parameters=toggle
-            ),
+            GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_BACKGROUND_LIGHT_TOGGLE, parameters=toggle),
         ),
     )
 
@@ -96,9 +94,7 @@ def _lamp() -> GoveeDevice:
         sku="H6054",
         name="Lamp",
         device_type="devices.types.light",
-        capabilities=(
-            GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}),
-        ),
+        capabilities=(GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}),),
     )
 
 
@@ -297,9 +293,7 @@ class TestCoordinatorCeilingFanPush:
     def test_ordinary_light_push_untouched_by_frames(self):
         coordinator = _coordinator()
 
-        coordinator._on_mqtt_state_update(
-            LAMP_ID, {"onOff": 1, "_op_frames": [FAN_RUNNING_SPEED4_DOWN.hex()]}
-        )
+        coordinator._on_mqtt_state_update(LAMP_ID, {"onOff": 1, "_op_frames": [FAN_RUNNING_SPEED4_DOWN.hex()]})
 
         state = coordinator._states[LAMP_ID]
         assert state.power_state is True
@@ -312,20 +306,14 @@ class TestCoordinatorOptimisticCeilingFan:
         coordinator = _coordinator()
         state = coordinator._states[FAN_ID]
 
-        coordinator._apply_optimistic_update(
-            FAN_ID, ToggleCommand(toggle_instance=INSTANCE_FAN_TOGGLE, enabled=True)
-        )
+        coordinator._apply_optimistic_update(FAN_ID, ToggleCommand(toggle_instance=INSTANCE_FAN_TOGGLE, enabled=True))
         assert state.ceiling_fan_on is True
 
-        coordinator._apply_optimistic_update(
-            FAN_ID, ModeCommand(mode_instance=INSTANCE_FAN_SPEED_MODE, value=5)
-        )
+        coordinator._apply_optimistic_update(FAN_ID, ModeCommand(mode_instance=INSTANCE_FAN_SPEED_MODE, value=5))
         assert state.ceiling_fan_speed == 5
         assert state.ceiling_fan_on is True
 
-        coordinator._apply_optimistic_update(
-            FAN_ID, ToggleCommand(toggle_instance=INSTANCE_FAN_TOGGLE, enabled=False)
-        )
+        coordinator._apply_optimistic_update(FAN_ID, ToggleCommand(toggle_instance=INSTANCE_FAN_TOGGLE, enabled=False))
         assert state.ceiling_fan_on is False
 
     def test_direction_change_marks_fan_running(self):

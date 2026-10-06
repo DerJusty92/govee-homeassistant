@@ -1,20 +1,19 @@
 """Device model representing a Govee device and its capabilities.
 
-Frozen dataclass for immutability - device properties don't change at runtime.
+``GoveeDevice`` and ``GoveeCapability`` are frozen dataclasses: device
+properties do not change at runtime. ``GoveeLeakSensorState`` is mutable by
+design, like ``GoveeDeviceState`` in ``state.py``.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from ..const import MAIN_LIGHT_TOGGLE_SKUS, SKU_SEGMENT_OVERRIDES
-
-_LOGGER = logging.getLogger(__name__)
+from ..const import MAIN_LIGHT_TOGGLE_SKUS, MULTI_OUTLET_MQTT_SKUS, SKU_SEGMENT_OVERRIDES
 
 # Leak sensor SKUs
 LEAK_SENSOR_SKUS = frozenset({"H5058", "H5054", "H5055", "H5059"})
@@ -27,6 +26,23 @@ LEAK_HUB_SKUS = frozenset({"H5043", "H5044"})
 # leak sensor (observed regression in v2026.6.24). Detection is therefore
 # SKU-locked here, consistent with LEAK_SENSOR_SKUS. Add new presence SKUs here.
 PRESENCE_SENSOR_SKUS = frozenset({"H5127"})
+
+# Pump-model dehumidifiers (H7152 "Max") — the only variant with a drain
+# pump/hose, distinct from the H7150/H7151 tank-only models. Neither the
+# pump-fault flag nor the hose-connection mode is a capability or event; both
+# are decoded from AWS IoT push frames (see GoveeDeviceState). Detection is
+# therefore SKU-locked, issue #114 follow-up.
+PUMP_DEHUMIDIFIER_SKUS = frozenset({"H7152"})
+
+# Smart outlets that report live voltage/current/power/energy over AWS IoT
+# push frames rather than any capability (issue #200). Detection is
+# SKU-locked like PUMP_DEHUMIDIFIER_SKUS, for the same reason: nothing in the
+# discovered capabilities list hints at it.
+POWER_MONITORING_SKUS = frozenset({"H5086"})
+
+# AQI monitors that report live PM2.5 (and a fresher temp/humidity pair) over
+# AWS IoT push frames rather than any Developer API field (issue #200).
+PM25_FRAME_SKUS = frozenset({"H5106"})
 
 # Thermo-hygrometer SKUs that the Govee *Developer* API (/user/devices) does
 # NOT return, so they never reach capability-based discovery and "don't show
@@ -55,6 +71,16 @@ THERMO_HYGRO_BFF_READ_SKUS = frozenset({"H5179", "H5112"})
 # the humidity capability for these so no humidity entity is created.
 TEMP_ONLY_BFF_SKUS = frozenset({"H5310"})
 
+# Probe (cooking) thermometers reached through the BFF list. Unlike every
+# other device here these are PULL devices: they never volunteer readings,
+# they only answer read requests over ptReal (see
+# api/probe_thermometer.py). Their BFF ``lastDeviceData`` stays
+# ``{"online": false}`` permanently, so the BFF read path has nothing to
+# offer them either — the coordinator polls them instead. H5194 is the
+# 4-probe sibling of the H5192: same transport, registers, and checksum,
+# confirmed on real hardware (issue #197).
+PROBE_THERMOMETER_BFF_SKUS = frozenset({"H5192", "H5194"})
+
 # Capability type constants (from Govee API v2.0)
 CAPABILITY_ON_OFF = "devices.capabilities.on_off"
 CAPABILITY_RANGE = "devices.capabilities.range"
@@ -79,7 +105,6 @@ DEVICE_TYPE_FAN = "devices.types.fan"
 DEVICE_TYPE_PURIFIER = "devices.types.air_purifier"
 DEVICE_TYPE_KETTLE = "devices.types.kettle"
 DEVICE_TYPE_AROMA_DIFFUSER = "devices.types.aroma_diffuser"
-DEVICE_TYPE_SENSOR = "devices.types.sensor"
 DEVICE_TYPE_AIR_QUALITY_MONITOR = "devices.types.air_quality_monitor"
 
 # Device types that are always mains-powered. Some of them still report a
@@ -126,16 +151,12 @@ INSTANCE_NIGHT_LIGHT = "nightlightToggle"
 # devices.capabilities.mode whose options carry the localized name + integer id
 # the control payload uses (issue #114).
 INSTANCE_NIGHTLIGHT_SCENE = "nightlightScene"
-INSTANCE_GRADUAL_ON = "gradientToggle"
-INSTANCE_TIMER = "timer"
 INSTANCE_OSCILLATION = "oscillationToggle"
 INSTANCE_WORK_MODE = "workMode"
 INSTANCE_HDMI_SOURCE = "hdmiSource"
 INSTANCE_MUSIC_MODE = "musicMode"
 INSTANCE_DREAMVIEW = "dreamViewToggle"
-INSTANCE_TEMPERATURE = "temperature"
 INSTANCE_TARGET_TEMPERATURE = "targetTemperature"
-INSTANCE_FAN_SPEED = "fanSpeed"
 # Ceiling-fan-with-light combo instances (e.g. H1310, reported as
 # devices.types.light with an integrated fan). Distinct from the standalone
 # fan shape (workMode / fanSpeed / oscillationToggle) — issue #74.
@@ -265,18 +286,12 @@ class GoveeCapability:
     @property
     def is_color_rgb(self) -> bool:
         """Check if this is an RGB color capability."""
-        return (
-            self.type == CAPABILITY_COLOR_SETTING
-            and self.instance == INSTANCE_COLOR_RGB
-        )
+        return self.type == CAPABILITY_COLOR_SETTING and self.instance == INSTANCE_COLOR_RGB
 
     @property
     def is_color_temp(self) -> bool:
         """Check if this is a color temperature capability."""
-        return (
-            self.type == CAPABILITY_COLOR_SETTING
-            and self.instance == INSTANCE_COLOR_TEMP
-        )
+        return self.type == CAPABILITY_COLOR_SETTING and self.instance == INSTANCE_COLOR_TEMP
 
     @property
     def is_segment_color(self) -> bool:
@@ -289,10 +304,7 @@ class GoveeCapability:
 
         Uses case-insensitive matching for robustness.
         """
-        return (
-            self.type == CAPABILITY_DYNAMIC_SCENE
-            and self.instance.lower() == INSTANCE_SCENE.lower()
-        )
+        return self.type == CAPABILITY_DYNAMIC_SCENE and self.instance.lower() == INSTANCE_SCENE.lower()
 
     @property
     def is_diy_scene(self) -> bool:
@@ -300,10 +312,7 @@ class GoveeCapability:
 
         Uses case-insensitive matching for robustness.
         """
-        return (
-            self.type == CAPABILITY_DYNAMIC_SCENE
-            and self.instance.lower() == INSTANCE_DIY.lower()
-        )
+        return self.type == CAPABILITY_DYNAMIC_SCENE and self.instance.lower() == INSTANCE_DIY.lower()
 
     @property
     def is_toggle(self) -> bool:
@@ -411,6 +420,17 @@ class GoveeDevice:
         return [instance for _, instance in sorted(matches)]
 
     @property
+    def mqtt_outlet_count(self) -> int:
+        """Outlets addressable only over AWS IoT (MULTI_OUTLET_MQTT_SKUS, #184).
+
+        Zero when the Developer API already advertises ``socketToggle{N}``
+        for the plug — the live REST switches win over optimistic ones.
+        """
+        if self.is_group or self.socket_toggle_instances:
+            return 0
+        return MULTI_OUTLET_MQTT_SKUS.get(self.sku.upper(), 0)
+
+    @property
     def socket_toggle_instances(self) -> list[str]:
         """Independently switchable outlets on multi-socket plugs (issue #114).
 
@@ -473,16 +493,14 @@ class GoveeDevice:
     def supports_main_light_toggle(self) -> bool:
         """Check if device exposes a separate main-light toggle (H1310/H1370)."""
         return any(
-            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_MAIN_LIGHT_TOGGLE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_MAIN_LIGHT_TOGGLE for cap in self.capabilities
         )
 
     @property
     def supports_background_light_toggle(self) -> bool:
         """Check if device exposes a separate background-light toggle (#114)."""
         return any(
-            cap.type == CAPABILITY_TOGGLE
-            and cap.instance == INSTANCE_BACKGROUND_LIGHT_TOGGLE
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_BACKGROUND_LIGHT_TOGGLE
             for cap in self.capabilities
         )
 
@@ -500,8 +518,7 @@ class GoveeDevice:
     def supports_snapshots(self) -> bool:
         """Check if device exposes saved snapshots (dynamic_scene::snapshot, #114)."""
         return any(
-            cap.type == CAPABILITY_DYNAMIC_SCENE and cap.instance == INSTANCE_SNAPSHOT
-            for cap in self.capabilities
+            cap.type == CAPABILITY_DYNAMIC_SCENE and cap.instance == INSTANCE_SNAPSHOT for cap in self.capabilities
         )
 
     def get_snapshot_options(self) -> list[dict[str, Any]]:
@@ -530,10 +547,7 @@ class GoveeDevice:
         - Music setting capability (devices.capabilities.music_setting)
         - DIY scene support (which includes music reactive options)
         """
-        return (
-            any(cap.type == CAPABILITY_MUSIC_MODE for cap in self.capabilities)
-            or self.supports_diy_scenes
-        )
+        return any(cap.type == CAPABILITY_MUSIC_MODE for cap in self.capabilities) or self.supports_diy_scenes
 
     @property
     def is_plug(self) -> bool:
@@ -593,9 +607,32 @@ class GoveeDevice:
     def supports_water_full_event(self) -> bool:
         """Check if device exposes a water-tank-full event capability."""
         return any(
-            cap.type == CAPABILITY_EVENT and cap.instance == INSTANCE_WATER_FULL_EVENT
-            for cap in self.capabilities
+            cap.type == CAPABILITY_EVENT and cap.instance == INSTANCE_WATER_FULL_EVENT for cap in self.capabilities
         )
+
+    @property
+    def supports_pump_state(self) -> bool:
+        """Check if device can report a pump-fault flag (H7152 "Max").
+
+        Not a capability (absent from the discovered capabilities list even
+        while the fault is active), not on the OpenAPI event channel, and not
+        in the flat MQTT ``state`` keys — confirmed empty across live fault
+        captures. Detection is SKU-locked (``PUMP_DEHUMIDIFIER_SKUS``) rather
+        than capability-based, since the flag never surfaces there at all.
+        """
+        return self.sku.upper() in PUMP_DEHUMIDIFIER_SKUS
+
+    @property
+    def supports_power_monitoring(self) -> bool:
+        """Check if device reports live voltage/current/power/energy (H5086).
+
+        Not a capability (absent from the discovered capabilities list) and
+        not on the OpenAPI event channel or in the flat MQTT ``state`` keys —
+        only in the AWS IoT status push's ``op.command`` BLE-format frames,
+        decoded in :meth:`GoveeDeviceState.update_power_monitoring_from_frames`.
+        Detection is SKU-locked (``POWER_MONITORING_SKUS``), issue #200.
+        """
+        return self.sku.upper() in POWER_MONITORING_SKUS
 
     @property
     def supports_presence_event(self) -> bool:
@@ -626,27 +663,35 @@ class GoveeDevice:
         if self.supports_presence_event:
             return False
         return any(
-            cap.type == CAPABILITY_EVENT
-            and cap.instance == INSTANCE_BODY_APPEARED_EVENT
-            for cap in self.capabilities
+            cap.type == CAPABILITY_EVENT and cap.instance == INSTANCE_BODY_APPEARED_EVENT for cap in self.capabilities
         )
 
     @property
     def supports_temperature_sensor(self) -> bool:
         """Check if device exposes a sensorTemperature property (e.g. H5109,
-        H5179). The capability is read-only — surfaced as an HA sensor."""
+        H5179), or is a pump-model dehumidifier (H7152) whose AWS IoT push
+        frames carry a reverse-engineered live temperature reading — no
+        capability exists for that one at all, see
+        GoveeDeviceState.update_temperature_from_frames. The capability path
+        is read-only — surfaced as an HA sensor either way."""
+        if self.sku.upper() in PUMP_DEHUMIDIFIER_SKUS:
+            return True
         return any(
-            cap.type == CAPABILITY_PROPERTY
-            and cap.instance == INSTANCE_SENSOR_TEMPERATURE
+            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_SENSOR_TEMPERATURE
             for cap in self.capabilities
         )
 
     @property
     def supports_humidity_sensor(self) -> bool:
-        """Check if device exposes a sensorHumidity property."""
+        """Check if device exposes a sensorHumidity property, or is a
+        pump-model dehumidifier (H7152) whose AWS IoT push frames carry a
+        reverse-engineered live humidity reading alongside temperature — no
+        capability exists for that one at all, see
+        GoveeDeviceState.update_temperature_from_frames."""
+        if self.sku.upper() in PUMP_DEHUMIDIFIER_SKUS:
+            return True
         return any(
-            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_SENSOR_HUMIDITY
-            for cap in self.capabilities
+            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_SENSOR_HUMIDITY for cap in self.capabilities
         )
 
     @property
@@ -656,9 +701,19 @@ class GoveeDevice:
         Read-only index surfaced as an HA sensor — issue #114.
         """
         return any(
-            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_AIR_QUALITY
-            for cap in self.capabilities
+            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_AIR_QUALITY for cap in self.capabilities
         )
+
+    @property
+    def supports_pm25_frame(self) -> bool:
+        """Check if device reports live PM2.5 over AWS IoT push frames (H5106).
+
+        Not a capability — the Developer API has no PM2.5 field for this SKU
+        at all, only the coarse airQuality index above. Detection is
+        SKU-locked (``PM25_FRAME_SKUS``), issue #200. See
+        :meth:`GoveeDeviceState.update_pm25_from_frames`.
+        """
+        return self.sku.upper() in PM25_FRAME_SKUS
 
     @property
     def supports_filter_life(self) -> bool:
@@ -667,8 +722,7 @@ class GoveeDevice:
         Read-only remaining-life percentage surfaced as an HA sensor — #114.
         """
         return any(
-            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_FILTER_LIFE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_FILTER_LIFE for cap in self.capabilities
         )
 
     @property
@@ -677,15 +731,17 @@ class GoveeDevice:
 
         Read-only CO₂ concentration in ppm, surfaced as an HA sensor — #117.
         """
-        return any(
-            cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_CO2
-            for cap in self.capabilities
-        )
+        return any(cap.type == CAPABILITY_PROPERTY and cap.instance == INSTANCE_CO2 for cap in self.capabilities)
 
     @property
     def is_thermometer(self) -> bool:
         """Check if device is a stand-alone thermometer/hygrometer."""
         return self.device_type == DEVICE_TYPE_THERMOMETER
+
+    @property
+    def is_probe_thermometer(self) -> bool:
+        """Check if device is a probe (cooking) thermometer, e.g. H5192."""
+        return self.sku in PROBE_THERMOMETER_BFF_SKUS
 
     def get_humidity_range(self) -> tuple[int, int]:
         """Extract target humidity range from the range.humidity capability.
@@ -704,10 +760,7 @@ class GoveeDevice:
     @property
     def supports_humidity_range(self) -> bool:
         """Check if device exposes a range::humidity setpoint capability (#114)."""
-        return any(
-            cap.type == CAPABILITY_RANGE and cap.instance == INSTANCE_HUMIDITY
-            for cap in self.capabilities
-        )
+        return any(cap.type == CAPABILITY_RANGE and cap.instance == INSTANCE_HUMIDITY for cap in self.capabilities)
 
     def auto_mode_value_is_setpoint(self) -> bool:
         """Whether the Auto work-mode's modeValue carries the humidity setpoint.
@@ -789,8 +842,7 @@ class GoveeDevice:
     def supports_thermostat_toggle(self) -> bool:
         """Check if device supports thermostat (auto-stop) toggle."""
         return any(
-            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_THERMOSTAT_TOGGLE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_THERMOSTAT_TOGGLE for cap in self.capabilities
         )
 
     @property
@@ -803,10 +855,7 @@ class GoveeDevice:
         to know which shape a given device uses (issue #29).
         """
         for cap in self.capabilities:
-            if (
-                cap.type != CAPABILITY_TEMPERATURE_SETTING
-                or cap.instance != INSTANCE_TARGET_TEMPERATURE
-            ):
+            if cap.type != CAPABILITY_TEMPERATURE_SETTING or cap.instance != INSTANCE_TARGET_TEMPERATURE:
                 continue
             fields = cap.parameters.get("fields") if cap.parameters else None
             if not fields:
@@ -829,12 +878,10 @@ class GoveeDevice:
         (workMode / fanSpeed / oscillation) — issue #74.
         """
         has_toggle = any(
-            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_FAN_TOGGLE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_FAN_TOGGLE for cap in self.capabilities
         )
         has_speed = any(
-            cap.type == CAPABILITY_MODE and cap.instance == INSTANCE_FAN_SPEED_MODE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_MODE and cap.instance == INSTANCE_FAN_SPEED_MODE for cap in self.capabilities
         )
         return has_toggle and has_speed
 
@@ -842,8 +889,7 @@ class GoveeDevice:
     def supports_reverse_airflow(self) -> bool:
         """Check if the integrated ceiling fan supports reverse airflow."""
         return any(
-            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_REVERSE_AIRFLOW
-            for cap in self.capabilities
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_REVERSE_AIRFLOW for cap in self.capabilities
         )
 
     @property
@@ -854,8 +900,7 @@ class GoveeDevice:
         standalone fan's ``oscillationToggle`` (see supports_oscillation).
         """
         return any(
-            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_FAN_OSCILLATE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_TOGGLE and cap.instance == INSTANCE_FAN_OSCILLATE for cap in self.capabilities
         )
 
     def get_ceiling_fan_speed_options(self) -> list[dict[str, Any]]:
@@ -888,10 +933,7 @@ class GoveeDevice:
         Legacy devices use BLE passthrough via MQTT.
         """
         for cap in self.capabilities:
-            if (
-                cap.type == CAPABILITY_MUSIC_MODE
-                and cap.instance == INSTANCE_MUSIC_MODE
-            ):
+            if cap.type == CAPABILITY_MUSIC_MODE and cap.instance == INSTANCE_MUSIC_MODE:
                 # STRUCT capabilities have 'fields' array in parameters
                 return "fields" in cap.parameters
         return False
@@ -903,10 +945,7 @@ class GoveeDevice:
         Pattern validated in external repositories.
         """
         for cap in self.capabilities:
-            if (
-                cap.type == CAPABILITY_MUSIC_MODE
-                and cap.instance == INSTANCE_MUSIC_MODE
-            ):
+            if cap.type == CAPABILITY_MUSIC_MODE and cap.instance == INSTANCE_MUSIC_MODE:
                 for f in cap.parameters.get("fields", []):
                     if f.get("fieldName") == "musicMode":
                         options: list[dict[str, Any]] = f.get("options", [])
@@ -919,10 +958,7 @@ class GoveeDevice:
         Returns (min, max) tuple, defaulting to (0, 100).
         """
         for cap in self.capabilities:
-            if (
-                cap.type == CAPABILITY_MUSIC_MODE
-                and cap.instance == INSTANCE_MUSIC_MODE
-            ):
+            if cap.type == CAPABILITY_MUSIC_MODE and cap.instance == INSTANCE_MUSIC_MODE:
                 for f in cap.parameters.get("fields", []):
                     if f.get("fieldName") == "sensitivity":
                         range_info = f.get("range", {})
@@ -938,10 +974,7 @@ class GoveeDevice:
         Returns (min, max) tuple, defaulting to (16, 35) Celsius.
         """
         for cap in self.capabilities:
-            if (
-                cap.type == CAPABILITY_TEMPERATURE_SETTING
-                and cap.instance == INSTANCE_TARGET_TEMPERATURE
-            ):
+            if cap.type == CAPABILITY_TEMPERATURE_SETTING and cap.instance == INSTANCE_TARGET_TEMPERATURE:
                 for f in cap.parameters.get("fields", []):
                     if f.get("fieldName") == "temperature":
                         range_data = f.get("range", {})
@@ -1047,9 +1080,7 @@ class GoveeDevice:
                         # Find the gearMode options within the nested structure
                         for opt in options:
                             if opt.get("name") == "gearMode":
-                                gear_options: list[dict[str, Any]] = opt.get(
-                                    "options", []
-                                )
+                                gear_options: list[dict[str, Any]] = opt.get("options", [])
                                 if gear_options:
                                     return gear_options
         return []
@@ -1095,11 +1126,7 @@ class GoveeDevice:
             return False
         if self.is_plug and not (self.supports_rgb or self.supports_color_temp):
             return False
-        return (
-            self.device_type == DEVICE_TYPE_LIGHT
-            or self.supports_rgb
-            or self.supports_color_temp
-        )
+        return self.device_type == DEVICE_TYPE_LIGHT or self.supports_rgb or self.supports_color_temp
 
     @property
     def has_nightlight_light(self) -> bool:
@@ -1121,8 +1148,7 @@ class GoveeDevice:
     def supports_nightlight_scene(self) -> bool:
         """Check if device exposes a nightlightScene mode capability (#114)."""
         return any(
-            cap.type == CAPABILITY_MODE and cap.instance == INSTANCE_NIGHTLIGHT_SCENE
-            for cap in self.capabilities
+            cap.type == CAPABILITY_MODE and cap.instance == INSTANCE_NIGHTLIGHT_SCENE for cap in self.capabilities
         )
 
     def get_nightlight_scene_options(self) -> list[dict[str, Any]]:
@@ -1213,9 +1239,7 @@ class GoveeDevice:
         device_id = data.get("device", "")
         sku = data.get("sku", "")
         if not device_id or not sku:
-            raise ValueError(
-                f"Device missing required fields: device_id={device_id!r}, sku={sku!r}"
-            )
+            raise ValueError(f"Device missing required fields: device_id={device_id!r}, sku={sku!r}")
         name = data.get("deviceName", sku)
         device_type = data.get("type", "devices.types.light")
 
@@ -1236,7 +1260,8 @@ class GoveeDevice:
             cap = GoveeCapability(
                 type=raw_cap.get("type", ""),
                 instance=raw_cap.get("instance", ""),
-                parameters=raw_cap.get("parameters", {}),
+                # ``or {}``: a null parameters block must not become None.
+                parameters=raw_cap.get("parameters") or {},
             )
             capabilities.append(cap)
 
@@ -1250,9 +1275,7 @@ class GoveeDevice:
         )
 
     @classmethod
-    def synthetic_thermometer(
-        cls, device_id: str, sku: str, name: str, hub_device_id: str = ""
-    ) -> GoveeDevice:
+    def synthetic_thermometer(cls, device_id: str, sku: str, name: str, hub_device_id: str = "") -> GoveeDevice:
         """Build a thermometer GoveeDevice for a BFF-discovered thermo-hygrometer.
 
         Devices in ``THERMO_HYGRO_BFF_SKUS`` (e.g. H5301) are absent from the
@@ -1294,6 +1317,27 @@ class GoveeDevice:
         if hub_device_id:
             device = replace(device, hub_device_id=hub_device_id)
         return device
+
+    @classmethod
+    def synthetic_probe_thermometer(cls, device_id: str, sku: str, name: str) -> GoveeDevice:
+        """Build a GoveeDevice for a BFF-discovered probe thermometer.
+
+        Deliberately carries NO ``sensorTemperature`` capability, unlike
+        :meth:`synthetic_thermometer`. A probe thermometer has one reading
+        per probe and channel, which a single capability cannot express;
+        granting it would create a generic temperature entity that sits at
+        unknown forever. The per-probe entities in ``sensor.py`` attach on
+        :attr:`is_probe_thermometer` instead.
+        """
+        return cls.from_api_response(
+            {
+                "device": device_id,
+                "sku": sku,
+                "deviceName": name,
+                "type": DEVICE_TYPE_THERMOMETER,
+                "capabilities": [],
+            }
+        )
 
 
 @dataclass(frozen=True)

@@ -51,9 +51,7 @@ class TestSendFanOscillation:
         result = await manager.async_send_fan_oscillation(DEVICE_ID, SKU, False)
 
         assert result is True
-        client.async_publish_ptreal.assert_awaited_once_with(
-            DEVICE_ID, SKU, HOMEBRIDGE_OFF_B64, TOPIC
-        )
+        client.async_publish_ptreal.assert_awaited_once_with(DEVICE_ID, SKU, HOMEBRIDGE_OFF_B64, TOPIC)
         client.async_publish_command.assert_awaited_once()
         topic, cmd, payload = client.async_publish_command.call_args[0]
         assert topic == TOPIC

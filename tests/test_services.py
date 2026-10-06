@@ -1,10 +1,9 @@
-"""Tests for custom_components.govee.services module-level handlers.
+"""Tests for the ``govee.set_segment_color`` and ``govee.refresh_scenes`` handlers.
 
-These tests target ``async_set_segment_color_handler`` (the module-level
-extraction of the original ``govee.set_segment_color`` closure handler).
-The closure inside ``async_setup_services`` just delegates to this
-function with the registered ``hass`` instance, so the validation logic
-is reachable without a live service registry.
+The registered service callbacks delegate to the module-level handlers, so the
+validation logic is reachable without a live service registry. The device
+lookup is monkeypatched per test; ``_get_coordinator_for_device`` returns
+``(coordinator, govee_device_id)`` or ``None`` for an unknown device.
 """
 
 from __future__ import annotations
@@ -12,28 +11,25 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+
 from custom_components.govee.models import RGBColor, SegmentColorCommand
-from custom_components.govee.services import async_set_segment_color_handler
+from custom_components.govee.services import (
+    async_refresh_scenes_handler,
+    async_set_segment_color_handler,
+)
 
-
-def _make_hass_with_coordinator(
-    coordinator: MagicMock | None,
-) -> MagicMock:
-    """Build a mock hass whose ``_get_coordinator_for_device`` returns ``coordinator``.
-
-    The handler uses ``_get_coordinator_for_device(hass, device_id)`` which
-    is module-private; we monkeypatch the function on the services module
-    instead, so the mock here only needs to be a sentinel for ``hass``
-    identity. The actual lookup is overridden per-test via ``monkeypatch``.
-    """
-    return MagicMock(name="hass")
+LOOKUP = "custom_components.govee.services._get_coordinator_for_device"
 
 
 def _make_device(segment_count: int, device_id: str = "AA:BB:CC:DD:EE:FF:00:11") -> MagicMock:
     """Build a mock GoveeDevice-like object with the given segment_count."""
     device = MagicMock(name=f"device[{device_id}]")
     device.device_id = device_id
+    device.name = "Strip"
     device.segment_count = segment_count
+    device.supports_scenes = True
     return device
 
 
@@ -42,6 +38,7 @@ def _make_coordinator(device: MagicMock | None, device_id: str) -> MagicMock:
     coordinator = MagicMock(name="coordinator")
     coordinator.devices = {device_id: device} if device is not None else {}
     coordinator.async_control_device = AsyncMock(return_value=True)
+    coordinator.async_get_scenes = AsyncMock(return_value=[])
     return coordinator
 
 
@@ -57,61 +54,32 @@ def _build_call(device_id: str, segments: list[int], rgb: tuple[int, int, int] =
 
 
 class TestSetSegmentColorService:
-    """Tests for ``async_set_segment_color_handler``.
+    """Validation and dispatch of ``govee.set_segment_color``."""
 
-    Behaviour (per REQ-006 + user prompt T-003):
-
-    * If the device is unknown: log error, do not call
-      ``async_control_device``.
-    * If any segment index is ``>= device.segment_count``: log warning,
-      early-return without dispatching.
-    * Otherwise: dispatch exactly one ``SegmentColorCommand`` with the
-      supplied indices and RGB tuple.
-    """
-
-    async def test_out_of_range_segment_rejected(self, monkeypatch, caplog):
-        """Out-of-range indices for the H7075 (3 physical segments) are rejected."""
+    async def test_out_of_range_segment_rejected(self, monkeypatch):
+        """Out-of-range indices for the H7075 (3 physical segments) raise a validation error."""
         device_id = "AA:BB:CC:DD:EE:FF:00:11"
         device = _make_device(segment_count=3, device_id=device_id)
         coordinator = _make_coordinator(device, device_id)
-        hass = _make_hass_with_coordinator(coordinator)
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: (coordinator, device_id))
 
-        def fake_lookup(hass_arg, lookup_id):
-            return coordinator if lookup_id == device_id else None
+        with pytest.raises(ServiceValidationError) as excinfo:
+            await async_set_segment_color_handler(MagicMock(), _build_call(device_id, segments=[5, 6, 7]))
 
-        monkeypatch.setattr(
-            "custom_components.govee.services._get_coordinator_for_device",
-            fake_lookup,
-        )
-
-        call = _build_call(device_id, segments=[5, 6, 7])
-        with caplog.at_level("WARNING", logger="custom_components.govee.services"):
-            await async_set_segment_color_handler(hass, call)
-
+        assert excinfo.value.translation_key == "segment_out_of_range"
+        assert excinfo.value.translation_placeholders["indices"] == "5, 6, 7"
         coordinator.async_control_device.assert_not_called()
-        assert any(
-            "out of range" in record.getMessage().lower()
-            or "segment" in record.getMessage().lower()
-            for record in caplog.records
-        ), f"expected a warning about out-of-range segments, got: {[r.getMessage() for r in caplog.records]}"
 
     async def test_in_range_segment_accepted(self, monkeypatch):
         """Valid indices dispatch one SegmentColorCommand with the right payload."""
         device_id = "AA:BB:CC:DD:EE:FF:00:22"
         device = _make_device(segment_count=3, device_id=device_id)
         coordinator = _make_coordinator(device, device_id)
-        hass = _make_hass_with_coordinator(coordinator)
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: (coordinator, device_id))
 
-        def fake_lookup(hass_arg, lookup_id):
-            return coordinator if lookup_id == device_id else None
-
-        monkeypatch.setattr(
-            "custom_components.govee.services._get_coordinator_for_device",
-            fake_lookup,
+        await async_set_segment_color_handler(
+            MagicMock(), _build_call(device_id, segments=[0, 1, 2], rgb=(10, 20, 30))
         )
-
-        call = _build_call(device_id, segments=[0, 1, 2], rgb=(10, 20, 30))
-        await async_set_segment_color_handler(hass, call)
 
         coordinator.async_control_device.assert_awaited_once()
         sent_device_id, sent_command = coordinator.async_control_device.await_args.args
@@ -120,23 +88,63 @@ class TestSetSegmentColorService:
         assert sent_command.segment_indices == (0, 1, 2)
         assert sent_command.color == RGBColor(r=10, g=20, b=30)
 
-    async def test_unknown_device_logs_error_and_returns(self, monkeypatch, caplog):
-        """Unknown device_id: error logged, no command dispatched, no exception raised."""
-        hass = _make_hass_with_coordinator(None)
+    async def test_unknown_device_raises(self, monkeypatch):
+        """An unknown device_id raises a validation error naming the ID."""
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: None)
 
-        def fake_lookup(hass_arg, lookup_id):
-            return None
+        with pytest.raises(ServiceValidationError) as excinfo:
+            await async_set_segment_color_handler(MagicMock(), _build_call("missing-device-id", segments=[0]))
 
-        monkeypatch.setattr(
-            "custom_components.govee.services._get_coordinator_for_device",
-            fake_lookup,
-        )
+        assert excinfo.value.translation_key == "device_not_found"
+        assert excinfo.value.translation_placeholders["device_id"] == "missing-device-id"
 
-        call = _build_call("missing-device-id", segments=[0])
-        with caplog.at_level("ERROR", logger="custom_components.govee.services"):
-            await async_set_segment_color_handler(hass, call)
+    async def test_rejected_command_raises(self, monkeypatch):
+        """A command the cloud refuses surfaces as HomeAssistantError."""
+        device_id = "AA:BB:CC:DD:EE:FF:00:33"
+        device = _make_device(segment_count=3, device_id=device_id)
+        coordinator = _make_coordinator(device, device_id)
+        coordinator.async_control_device = AsyncMock(return_value=False)
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: (coordinator, device_id))
 
-        assert any(
-            "missing-device-id" in record.getMessage()
-            for record in caplog.records
-        ), f"expected an error mentioning the device_id, got: {[r.getMessage() for r in caplog.records]}"
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await async_set_segment_color_handler(MagicMock(), _build_call(device_id, segments=[0]))
+
+        assert excinfo.value.translation_key == "command_failed"
+
+
+class TestRefreshScenesService:
+    """Validation and dispatch of ``govee.refresh_scenes``."""
+
+    async def test_specific_device_refreshes_it(self, monkeypatch):
+        device_id = "AA:BB:CC:DD:EE:FF:00:11"
+        device = _make_device(segment_count=0, device_id=device_id)
+        coordinator = _make_coordinator(device, device_id)
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: (coordinator, device_id))
+
+        await async_refresh_scenes_handler(MagicMock(), SimpleNamespace(data={"device_id": device_id}))
+
+        coordinator.async_get_scenes.assert_awaited_once_with(device_id, refresh=True)
+
+    async def test_unknown_device_raises(self, monkeypatch):
+        monkeypatch.setattr(LOOKUP, lambda hass, raw: None)
+
+        with pytest.raises(ServiceValidationError):
+            await async_refresh_scenes_handler(MagicMock(), SimpleNamespace(data={"device_id": "nope"}))
+
+    async def test_no_loaded_entry_raises(self, monkeypatch):
+        monkeypatch.setattr("custom_components.govee.services._loaded_coordinators", lambda hass: [])
+
+        with pytest.raises(ServiceValidationError) as excinfo:
+            await async_refresh_scenes_handler(MagicMock(), SimpleNamespace(data={}))
+
+        assert excinfo.value.translation_key == "not_loaded"
+
+    async def test_all_devices_refreshed(self, monkeypatch):
+        device_id = "AA:BB:CC:DD:EE:FF:00:11"
+        device = _make_device(segment_count=0, device_id=device_id)
+        coordinator = _make_coordinator(device, device_id)
+        monkeypatch.setattr("custom_components.govee.services._loaded_coordinators", lambda hass: [coordinator])
+
+        await async_refresh_scenes_handler(MagicMock(), SimpleNamespace(data={}))
+
+        coordinator.async_get_scenes.assert_awaited_once_with(device_id, refresh=True)

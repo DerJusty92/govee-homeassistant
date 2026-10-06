@@ -284,9 +284,7 @@ class TestGoveeBLEState:
 # ==============================================================================
 
 
-def _make_ble_device(
-    address: str = "AA:BB:CC:DD:EE:FF", name: str = "Govee_H6072_1234"
-):
+def _make_ble_device(address: str = "AA:BB:CC:DD:EE:FF", name: str = "Govee_H6072_1234"):
     """Build a minimal BLEDevice-like object for tests."""
     device = MagicMock()
     device.address = address
@@ -398,13 +396,16 @@ class TestEnsureConnected:
         fake_client = MagicMock()
         fake_client.is_connected = True
 
-        with patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ) as mock_close, patch(
-            "custom_components.govee.api.ble.establish_connection",
-            AsyncMock(return_value=fake_client),
-        ) as mock_establish:
+        with (
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ) as mock_close,
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                AsyncMock(return_value=fake_client),
+            ) as mock_establish,
+        ):
             await device._ensure_connected()
 
         mock_close.assert_awaited_once_with("AA:BB:CC:DD:EE:FF")
@@ -433,12 +434,15 @@ class TestEnsureConnected:
             client.is_connected = True
             return client
 
-        with patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ), patch(
-            "custom_components.govee.api.ble.establish_connection",
-            side_effect=fake_establish,
+        with (
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ),
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                side_effect=fake_establish,
+            ),
         ):
             await device._ensure_connected()
 
@@ -462,12 +466,15 @@ class TestEnsureConnected:
             client.is_connected = True
             return client
 
-        with patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ), patch(
-            "custom_components.govee.api.ble.establish_connection",
-            side_effect=fake_establish,
+        with (
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ),
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                side_effect=fake_establish,
+            ),
         ):
             await device._ensure_connected()
 
@@ -483,13 +490,16 @@ class TestEnsureConnected:
         fake_client = MagicMock()
         fake_client.is_connected = True
 
-        with patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ) as mock_close, patch(
-            "custom_components.govee.api.ble.establish_connection",
-            AsyncMock(return_value=fake_client),
-        ) as mock_establish:
+        with (
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ) as mock_close,
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                AsyncMock(return_value=fake_client),
+            ) as mock_establish,
+        ):
             first = await device._ensure_connected()
             second = await device._ensure_connected()
 
@@ -511,12 +521,15 @@ class TestEnsureConnected:
             client.is_connected = True
             return client
 
-        with patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ), patch(
-            "custom_components.govee.api.ble.establish_connection",
-            side_effect=fake_establish,
+        with (
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ),
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                side_effect=fake_establish,
+            ),
         ):
             await device._ensure_connected()
 
@@ -750,9 +763,7 @@ class TestEncryptedTransport:
 
     @staticmethod
     def _session() -> GoveeBLESession:
-        return GoveeBLESession(
-            device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8)
-        )
+        return GoveeBLESession(device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8))
 
     @pytest.mark.asyncio
     async def test_write_sends_plaintext_without_session(self):
@@ -774,9 +785,7 @@ class TestEncryptedTransport:
         sent = client.write_gatt_char.call_args[0][1]
         assert sent != _build_power_frame(True)
         # The peer decrypts our transmissions with our tx key as its rx key.
-        peer = GoveeBLESession(
-            device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8)
-        )
+        peer = GoveeBLESession(device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8))
         assert peer.unwrap(sent) == _build_power_frame(True)
 
     @pytest.mark.asyncio
@@ -785,8 +794,12 @@ class TestEncryptedTransport:
         device, _client = self._connected_device()
         device._session = self._session()
 
+        # A late callback from a superseded client must be ignored...
         device._on_disconnected(MagicMock())
+        assert device._session is not None
 
+        # ...while the current client's drop clears the session.
+        device._on_disconnected(device._client)
         assert device._session is None
 
 
@@ -805,18 +818,24 @@ class TestNegotiationFailureNeverDowngrades:
         client.is_connected = True
         client.write_gatt_char = AsyncMock()
         client.disconnect = AsyncMock()
-        return client, patch(
-            "custom_components.govee.api.ble.establish_connection",
-            AsyncMock(return_value=client),
-        ), patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ), patch(
-            "custom_components.govee.api.ble.async_supports_encryption",
-            AsyncMock(return_value=supports),
-        ), patch(
-            "custom_components.govee.api.ble.async_establish_session",
-            AsyncMock(side_effect=establish_side_effect),
+        return (
+            client,
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                AsyncMock(return_value=client),
+            ),
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ),
+            patch(
+                "custom_components.govee.api.ble.async_supports_encryption",
+                AsyncMock(return_value=supports),
+            ),
+            patch(
+                "custom_components.govee.api.ble.async_establish_session",
+                AsyncMock(side_effect=establish_side_effect),
+            ),
         )
 
     @pytest.mark.asyncio
@@ -840,16 +859,21 @@ class TestNegotiationFailureNeverDowngrades:
         client.is_connected = True
         client.disconnect = AsyncMock()
 
-        with patch(
-            "custom_components.govee.api.ble.establish_connection",
-            AsyncMock(return_value=client),
-        ), patch(
-            "custom_components.govee.api.ble.close_stale_connections_by_address",
-            AsyncMock(),
-        ), patch(
-            "custom_components.govee.api.ble.async_supports_encryption",
-            AsyncMock(side_effect=TimeoutError("proxy busy")),
-        ), pytest.raises(TimeoutError):
+        with (
+            patch(
+                "custom_components.govee.api.ble.establish_connection",
+                AsyncMock(return_value=client),
+            ),
+            patch(
+                "custom_components.govee.api.ble.close_stale_connections_by_address",
+                AsyncMock(),
+            ),
+            patch(
+                "custom_components.govee.api.ble.async_supports_encryption",
+                AsyncMock(side_effect=TimeoutError("proxy busy")),
+            ),
+            pytest.raises(TimeoutError),
+        ):
             await device._ensure_connected()
 
         assert device._client is None
@@ -859,15 +883,11 @@ class TestNegotiationFailureNeverDowngrades:
     async def test_a_command_after_a_failed_handshake_renegotiates(self):
         """The failure must not be sticky for the life of the link."""
         device = GoveeBLEDevice(_make_ble_device())
-        session = GoveeBLESession(
-            device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8)
-        )
+        session = GoveeBLESession(device_key=bytes(16), tx_iv_key=bytes(8), rx_iv_key=bytes(8))
         client, p1, p2, p3, _ = self._patches()
         establish = AsyncMock(side_effect=[TimeoutError("no reply"), session])
 
-        with p1, p2, p3, patch(
-            "custom_components.govee.api.ble.async_establish_session", establish
-        ):
+        with p1, p2, p3, patch("custom_components.govee.api.ble.async_establish_session", establish):
             with pytest.raises(TimeoutError):
                 await device.turn_on()
             await device.turn_on()  # must try again, and succeed

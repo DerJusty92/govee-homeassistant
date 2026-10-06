@@ -38,6 +38,17 @@ STALE = GoveeIotCredentials(
     client_id="cid",
     endpoint="ep",
 )
+# What a re-login hands back: same account, rotated certificate.
+FRESH = GoveeIotCredentials(
+    token="fresh",
+    refresh_token="r2",
+    account_topic="GA/x",
+    iot_cert="c2",
+    iot_key="k2",
+    iot_ca=None,
+    client_id="cid",
+    endpoint="ep",
+)
 
 
 def _coordinator(*, email="a@b.c", password="pw", credentials=STALE):
@@ -48,13 +59,14 @@ def _coordinator(*, email="a@b.c", password="pw", credentials=STALE):
         data["email"] = email
     if password:
         data["password"] = password
-    coordinator._config_entry = SimpleNamespace(
-        data=data, options={}, entry_id="e1", title="Govee"
-    )
+    coordinator._config_entry = SimpleNamespace(data=data, options={}, entry_id="e1", title="Govee")
     coordinator.hass = MagicMock()
     coordinator._iot_credentials = credentials
     coordinator._last_iot_relogin = -IOT_RELOGIN_MIN_INTERVAL * 10
     coordinator._persist_refreshed_credentials = MagicMock()
+    # The refresh hands new material to the MQTT transport (or starts it).
+    coordinator._mqtt_client = None
+    coordinator._start_mqtt = AsyncMock()
     return coordinator
 
 
@@ -63,9 +75,7 @@ def _patched_client(auth_client):
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=auth_client)
     ctx.__aexit__ = AsyncMock(return_value=False)
-    return patch(
-        "custom_components.govee.coordinator.GoveeAuthClient", return_value=ctx
-    )
+    return patch("custom_components.govee.coordinator.GoveeAuthClient", return_value=ctx)
 
 
 class TestBffCallRetry:
@@ -86,9 +96,7 @@ class TestBffCallRetry:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(return_value=fresh)
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ):
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir"):
             result = await coordinator._async_bff_call(_op, "test call")
 
         # First attempt on the stale token, second on the refreshed one.
@@ -137,9 +145,11 @@ class TestBffCallRetry:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(return_value=fresh)
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ), pytest.raises(GoveeAuthError):
+        with (
+            _patched_client(auth_client),
+            patch("custom_components.govee.coordinator.ir"),
+            pytest.raises(GoveeAuthError),
+        ):
             await coordinator._async_bff_call(_op, "test call")
 
 
@@ -169,9 +179,7 @@ class TestRelogin:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(return_value=fresh)
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ):
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir"):
             assert await coordinator._async_refresh_iot_credentials() is True
             assert await coordinator._async_refresh_iot_credentials() is False
 
@@ -184,16 +192,11 @@ class TestRelogin:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(side_effect=Govee2FARequiredError())
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ) as ir_mod:
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir") as ir_mod:
             assert await coordinator._async_refresh_iot_credentials() is False
 
         ir_mod.async_create_issue.assert_called_once()
-        assert (
-            ir_mod.async_create_issue.call_args.kwargs["translation_key"]
-            == "mqtt_2fa_required"
-        )
+        assert ir_mod.async_create_issue.call_args.kwargs["translation_key"] == "mqtt_2fa_required"
 
     @pytest.mark.asyncio
     async def test_rejected_password_raises_its_own_repair(self):
@@ -201,15 +204,10 @@ class TestRelogin:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(side_effect=GoveeAuthError("bad password"))
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ) as ir_mod:
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir") as ir_mod:
             assert await coordinator._async_refresh_iot_credentials() is False
 
-        assert (
-            ir_mod.async_create_issue.call_args.kwargs["translation_key"]
-            == "mqtt_token_expired"
-        )
+        assert ir_mod.async_create_issue.call_args.kwargs["translation_key"] == "mqtt_token_expired"
 
     @pytest.mark.asyncio
     async def test_success_clears_the_expiry_repair(self):
@@ -218,9 +216,7 @@ class TestRelogin:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(return_value=fresh)
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ) as ir_mod:
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir") as ir_mod:
             assert await coordinator._async_refresh_iot_credentials() is True
 
         ir_mod.async_delete_issue.assert_called_once()
@@ -232,7 +228,35 @@ class TestRelogin:
         auth_client = MagicMock()
         auth_client.login = AsyncMock(side_effect=OSError("connection reset"))
 
-        with _patched_client(auth_client), patch(
-            "custom_components.govee.coordinator.ir"
-        ):
+        with _patched_client(auth_client), patch("custom_components.govee.coordinator.ir"):
             assert await coordinator._async_refresh_iot_credentials() is False
+
+
+class TestRefreshReachesMqtt:
+    """A refreshed credential set must reach the transport that authenticates with it."""
+
+    @pytest.mark.asyncio
+    async def test_running_client_is_restarted_with_new_credentials(self):
+        coordinator = _coordinator()
+        coordinator._mqtt_client = MagicMock()
+        coordinator._mqtt_client.async_restart = AsyncMock(return_value=True)
+        auth_client = MagicMock()
+        auth_client.login = AsyncMock(return_value=FRESH)
+
+        with _patched_client(auth_client):
+            assert await coordinator._async_refresh_iot_credentials() is True
+
+        coordinator._mqtt_client.async_restart.assert_awaited_once_with(FRESH)
+        coordinator._start_mqtt.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_client_that_never_started_is_started(self):
+        """Login failed at boot -> no client; a later successful refresh arms MQTT."""
+        coordinator = _coordinator()
+        auth_client = MagicMock()
+        auth_client.login = AsyncMock(return_value=FRESH)
+
+        with _patched_client(auth_client):
+            assert await coordinator._async_refresh_iot_credentials() is True
+
+        coordinator._start_mqtt.assert_awaited_once()

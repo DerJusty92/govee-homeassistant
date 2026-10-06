@@ -17,6 +17,15 @@ from custom_components.govee.sensor import GoveeConnectionModeSensor, async_setu
 
 _TRANSPORTS = ("ble", "lan", "mqtt", "cloud_api")
 
+_ICONS = json.loads(
+    (Path(__file__).resolve().parent.parent / "custom_components" / "govee" / "icons.json").read_text()
+)["entity"]["sensor"]["connection_mode"]
+
+
+def _icon_for(value: str) -> str:
+    """Icon Home Assistant resolves for a connection-mode value from icons.json."""
+    return _ICONS["state"].get(value, _ICONS["default"])
+
 
 def _device(
     device_id: str = "AA:BB:CC:DD:EE:FF:00:11",
@@ -95,7 +104,7 @@ def test_single_available_transport_wins(kind: str, expected_icon: str) -> None:
     """SCN-001..004: each transport is selected when it is the only healthy one."""
     entity = _sensor(_device(), _health(**{kind: True}))
     assert entity.native_value == kind
-    assert entity.icon == expected_icon
+    assert _icon_for(entity.native_value) == expected_icon
 
 
 def test_lan_beats_mqtt() -> None:
@@ -112,7 +121,7 @@ def test_zero_reachability_returns_unavailable() -> None:
     """SCN-007: tracked but failed transports produce the catch-all value."""
     entity = _sensor(_device(), _health())
     assert entity.native_value == "unavailable"
-    assert entity.icon == "mdi:lan-pending"
+    assert _icon_for(entity.native_value) == "mdi:lan-pending"
 
 
 def test_missing_health_entries_returns_unavailable() -> None:
@@ -241,7 +250,7 @@ def test_icon_matches_every_value(value: str, expected_icon: str) -> None:
     health = _health(**{value: True}) if value != "unavailable" else _health()
     entity = _sensor(_device(), health)
     assert entity.native_value == value
-    assert entity.icon == expected_icon
+    assert _icon_for(entity.native_value) == expected_icon
 
 
 def test_entity_is_diagnostic_enum_without_state_class() -> None:
@@ -326,7 +335,7 @@ def test_translation_entry_has_all_connection_mode_states() -> None:
     """SCN-024: source and English translation register all five values."""
     base = Path(__file__).resolve().parent.parent / "custom_components" / "govee"
     expected = {
-        "name": "Connection Mode",
+        "name": "Connection mode",
         "state": {
             "lan": "LAN",
             "mqtt": "MQTT",
@@ -382,4 +391,4 @@ def test_all_transports_unreachable_returns_unavailable() -> None:
     )
     entity = _sensor(_device(), health)
     assert entity.native_value == "unavailable"
-    assert entity.icon == "mdi:lan-pending"
+    assert _icon_for(entity.native_value) == "mdi:lan-pending"

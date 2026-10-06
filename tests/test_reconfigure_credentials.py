@@ -109,18 +109,20 @@ class TestReconfigureFlowOrdering:
 
         captured: dict = {}
 
-        def _abort(target, data_updates=None, **_kwargs):
-            captured["data_updates"] = data_updates
+        def _abort(target, data=None, **_kwargs):
+            captured["data"] = data
             return {"type": "abort", "reason": "reconfigure_successful"}
 
-        with patch.object(
-            GoveeConfigFlow, "async_update_reload_and_abort", side_effect=_abort
-        ), patch(
-            "custom_components.govee.config_flow.validate_api_key",
-            return_value=True,
-        ), patch(
-            "custom_components.govee.config_flow.validate_govee_credentials",
-            return_value=FRESH,
+        with (
+            patch.object(GoveeConfigFlow, "async_update_reload_and_abort", side_effect=_abort),
+            patch(
+                "custom_components.govee.config_flow.validate_api_key",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.govee.config_flow.validate_govee_credentials",
+                return_value=FRESH,
+            ),
         ):
             await flow.async_step_reconfigure(
                 {
@@ -130,9 +132,7 @@ class TestReconfigureFlowOrdering:
                 }
             )
 
-        written = captured.get("data_updates") or {}
+        written = captured.get("data") or {}
         creds = written.get(KEY_IOT_CREDENTIALS)
         assert creds is not None, "reconfigure wrote no credentials at all"
-        assert creds["token"] == "fresh-token", (
-            "reconfigure wrote the stale token back over the fresh one — #179"
-        )
+        assert creds["token"] == "fresh-token", "reconfigure wrote the stale token back over the fresh one — #179"

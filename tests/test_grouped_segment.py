@@ -54,9 +54,7 @@ def _make_grouped_segment_entity(
     device.segment_count = segment_count
 
     # Bypass GoveeGroupedSegmentEntity.__init__ which requires a real coordinator
-    with patch.object(
-        GoveeGroupedSegmentEntity, "__init__", lambda self, *a, **kw: None
-    ):
+    with patch.object(GoveeGroupedSegmentEntity, "__init__", lambda self, *a, **kw: None):
         entity = GoveeGroupedSegmentEntity.__new__(GoveeGroupedSegmentEntity)
 
     # Set the attributes that __init__ would normally set
@@ -142,9 +140,7 @@ class TestGroupedSegmentEntity:
     @pytest.mark.asyncio
     async def test_turn_off_skipped_when_device_already_off(self):
         """async_turn_off skips command when device is already off."""
-        entity = _make_grouped_segment_entity(
-            power_state=False, power_off_pending=False
-        )
+        entity = _make_grouped_segment_entity(power_state=False, power_off_pending=False)
 
         await entity.async_turn_off()
 
@@ -252,9 +248,7 @@ class TestGroupedSegmentEntity:
         coordinator.is_power_off_pending = lambda did: did in pending_power_off
 
         # Build grouped segment entity
-        with patch.object(
-            GoveeGroupedSegmentEntity, "__init__", lambda self, *a, **kw: None
-        ):
+        with patch.object(GoveeGroupedSegmentEntity, "__init__", lambda self, *a, **kw: None):
             entity = GoveeGroupedSegmentEntity.__new__(GoveeGroupedSegmentEntity)
         entity.coordinator = coordinator
         entity._device_id = "AA:BB:CC:DD:EE:FF:00:11"
@@ -295,9 +289,7 @@ class TestGroupedSegmentOptimisticSync:
     @pytest.mark.asyncio
     async def test_turn_on_broadcasts_the_signal_for_this_device(self):
         entity = _make_grouped_segment_entity()
-        with patch(
-            "custom_components.govee.platforms.grouped_segment.async_dispatcher_send"
-        ) as mock_send:
+        with patch("custom_components.govee.platforms.grouped_segment.async_dispatcher_send") as mock_send:
             await entity.async_turn_on()
 
         mock_send.assert_called_once_with(
@@ -311,9 +303,7 @@ class TestGroupedSegmentOptimisticSync:
     @pytest.mark.asyncio
     async def test_turn_off_broadcasts_off_state(self):
         entity = _make_grouped_segment_entity()
-        with patch(
-            "custom_components.govee.platforms.grouped_segment.async_dispatcher_send"
-        ) as mock_send:
+        with patch("custom_components.govee.platforms.grouped_segment.async_dispatcher_send") as mock_send:
             await entity.async_turn_off()
 
         args = mock_send.call_args[0]
@@ -325,12 +315,8 @@ class TestGroupedSegmentOptimisticSync:
         """Even the already-off/power-off-pending skip path must broadcast —
         the individual entities need to hear "off" regardless of whether a
         fresh command was actually sent (issue #164-adjacent)."""
-        entity = _make_grouped_segment_entity(
-            power_state=True, power_off_pending=True
-        )
-        with patch(
-            "custom_components.govee.platforms.grouped_segment.async_dispatcher_send"
-        ) as mock_send:
+        entity = _make_grouped_segment_entity(power_state=True, power_off_pending=True)
+        with patch("custom_components.govee.platforms.grouped_segment.async_dispatcher_send") as mock_send:
             await entity.async_turn_off()
 
         entity.coordinator.async_control_device.assert_not_called()

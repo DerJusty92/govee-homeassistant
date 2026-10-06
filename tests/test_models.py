@@ -119,9 +119,7 @@ class TestGoveeCapability:
 
     def test_is_power(self):
         """Test power capability detection."""
-        cap = GoveeCapability(
-            type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={})
         assert cap.is_power is True
         assert cap.is_brightness is False
 
@@ -137,41 +135,31 @@ class TestGoveeCapability:
 
     def test_is_color_rgb(self):
         """Test RGB color capability detection."""
-        cap = GoveeCapability(
-            type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_RGB, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_RGB, parameters={})
         assert cap.is_color_rgb is True
         assert cap.is_color_temp is False
 
     def test_is_color_temp(self):
         """Test color temperature capability detection."""
-        cap = GoveeCapability(
-            type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_TEMP, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_TEMP, parameters={})
         assert cap.is_color_temp is True
         assert cap.is_color_rgb is False
 
     def test_is_scene(self):
         """Test scene capability detection."""
-        cap = GoveeCapability(
-            type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SCENE, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SCENE, parameters={})
         assert cap.is_scene is True
 
     def test_is_oscillation(self):
         """Test oscillation capability detection (fans)."""
-        cap = GoveeCapability(
-            type=CAPABILITY_TOGGLE, instance=INSTANCE_OSCILLATION, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_OSCILLATION, parameters={})
         assert cap.is_oscillation is True
         assert cap.is_toggle is True
         assert cap.is_night_light is False
 
     def test_is_work_mode(self):
         """Test work mode capability detection (fans)."""
-        cap = GoveeCapability(
-            type=CAPABILITY_WORK_MODE, instance=INSTANCE_WORK_MODE, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_WORK_MODE, instance=INSTANCE_WORK_MODE, parameters={})
         assert cap.is_work_mode is True
 
     def test_is_hdmi_source(self):
@@ -206,9 +194,7 @@ class TestGoveeCapability:
 
     def test_immutable(self):
         """Test that GoveeCapability is immutable (frozen)."""
-        cap = GoveeCapability(
-            type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}
-        )
+        cap = GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={})
         with pytest.raises(AttributeError):
             cap.type = "other"
 
@@ -282,9 +268,7 @@ class TestGoveeDevice:
             name="Smart Outlet Extender",
             device_type="devices.types.socket",
             capabilities=(
-                GoveeCapability(
-                    type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}
-                ),
+                GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}),
                 GoveeCapability(
                     type=CAPABILITY_COLOR_SETTING,
                     instance=INSTANCE_COLOR_RGB,
@@ -1026,9 +1010,7 @@ class TestGoveeDeviceState:
         state.active_snapshot = 7
         state.last_scene_id = "keep-me"
 
-        state.update_from_lan(
-            FakeLanStatus(on=True, brightness=50, color=RGBColor(10, 20, 30))
-        )
+        state.update_from_lan(FakeLanStatus(on=True, brightness=50, color=RGBColor(10, 20, 30)))
 
         # The four readable fields were overlaid...
         assert state.power_state is True
@@ -1104,9 +1086,7 @@ class TestGoveeDeviceState:
         state = GoveeDeviceState.create_empty("dev")
         state.color = RGBColor(255, 0, 0)
 
-        state.update_from_lan(
-            FakeLanStatus(color=RGBColor(0, 0, 0), color_temp_kelvin=0)
-        )
+        state.update_from_lan(FakeLanStatus(color=RGBColor(0, 0, 0), color_temp_kelvin=0))
 
         assert state.color == RGBColor(255, 0, 0)
 
@@ -1124,9 +1104,7 @@ class TestGoveeDeviceState:
         state = GoveeDeviceState.create_empty("dev")
         state.color = RGBColor(255, 0, 0)
 
-        state.update_from_lan(
-            FakeLanStatus(color=RGBColor(10, 10, 10), color_temp_kelvin=4000)
-        )
+        state.update_from_lan(FakeLanStatus(color=RGBColor(10, 10, 10), color_temp_kelvin=4000))
 
         assert state.color_temp_kelvin == 4000
         assert state.color is None
@@ -1137,9 +1115,7 @@ class TestGoveeDeviceState:
         state.color_temp_kelvin = 4000
         state.color = None
 
-        state.update_from_lan(
-            FakeLanStatus(color=RGBColor(0, 128, 255), color_temp_kelvin=0)
-        )
+        state.update_from_lan(FakeLanStatus(color=RGBColor(0, 128, 255), color_temp_kelvin=0))
 
         assert state.color == RGBColor(0, 128, 255)
         assert state.color_temp_kelvin is None
@@ -1400,7 +1376,8 @@ class TestSegmentCountOverride:
     def test_h7075_returns_3_segments(self):
         """H7075 with elementRange.max=14 + size.max=3 collapses to 3 (REQ-001)."""
         cap = _make_rgbic_segment_capability(
-            element_range_max=14, size_max=3,
+            element_range_max=14,
+            size_max=3,
         )
         device = _make_rgbic_device("H7075", cap)
         assert device.segment_count == 3
@@ -1433,7 +1410,9 @@ class TestSegmentCountOverride:
         import custom_components.govee.models.device as device_module
 
         monkeypatch.setattr(
-            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 3},
+            device_module,
+            "SKU_SEGMENT_OVERRIDES",
+            {"H7075": 3},
         )
         cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
         device = _make_rgbic_device("h7075", cap)
@@ -1442,7 +1421,9 @@ class TestSegmentCountOverride:
     def test_segmentCount_direct_wins_when_no_override(self):
         """API ``segmentCount`` parameter is respected when SKU has no override (REQ-002)."""
         cap = _make_rgbic_segment_capability(
-            element_range_max=None, size_max=None, segment_count=10,
+            element_range_max=None,
+            size_max=None,
+            segment_count=10,
         )
         device = _make_rgbic_device("H7028", cap)
         assert device.segment_count == 10
@@ -1452,10 +1433,14 @@ class TestSegmentCountOverride:
         import custom_components.govee.models.device as device_module
 
         monkeypatch.setattr(
-            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 3},
+            device_module,
+            "SKU_SEGMENT_OVERRIDES",
+            {"H7075": 3},
         )
         cap = _make_rgbic_segment_capability(
-            element_range_max=None, size_max=None, segment_count=10,
+            element_range_max=None,
+            size_max=None,
+            segment_count=10,
         )
         device = _make_rgbic_device("H7075", cap)
         assert device.segment_count == 3
@@ -1472,7 +1457,9 @@ class TestSegmentCountOverride:
         import custom_components.govee.models.device as device_module
 
         monkeypatch.setattr(
-            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 5},
+            device_module,
+            "SKU_SEGMENT_OVERRIDES",
+            {"H7075": 5},
         )
         cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
         device = _make_rgbic_device("H7075", cap)
@@ -1490,7 +1477,9 @@ class TestSegmentCountOverride:
         import custom_components.govee.models.device as device_module
 
         monkeypatch.setattr(
-            device_module, "SKU_SEGMENT_OVERRIDES", {},
+            device_module,
+            "SKU_SEGMENT_OVERRIDES",
+            {},
         )
         cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
         device = _make_rgbic_device("H9999", cap)
@@ -1505,7 +1494,9 @@ class TestSegmentCountOverride:
         grouped devices fall here.
         """
         cap = _make_rgbic_segment_capability(
-            element_range_max=None, size_max=None, segment_count=None,
+            element_range_max=None,
+            size_max=None,
+            segment_count=None,
         )
         device = _make_rgbic_device("H6000", cap)
         # No segment capability → 0, not an exception.

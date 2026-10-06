@@ -570,9 +570,7 @@ def test_validate_lan_device_overrides_raises_on_malformed(raw):
 def test_validate_and_parse_disagree_only_on_malformed_input():
     """The lenient/strict split is the point: same good input, same result."""
     good = "AA:BB=10.20.0.6! CC:DD=10.20.0.7"
-    assert lan.validate_lan_device_overrides(good) == lan.parse_lan_device_overrides(
-        good
-    )
+    assert lan.validate_lan_device_overrides(good) == lan.parse_lan_device_overrides(good)
 
     bad = "AA:BB=not-an-ip"
     assert lan.parse_lan_device_overrides(bad) == {}

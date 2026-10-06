@@ -104,9 +104,7 @@ class TestMultiSyncCapture:
     def test_undecodable_base64_does_not_record(self):
         """A command that fails base64 decode is skipped, not recorded."""
         client = _make_client()
-        client._handle_multisync(
-            HUB_ID, {"device": HUB_ID, "op": {"command": ["!!!not-base64!!!"]}}
-        )
+        client._handle_multisync(HUB_ID, {"device": HUB_ID, "op": {"command": ["!!!not-base64!!!"]}})
         # Lenient base64 may yield bytes for some inputs; assert no crash and
         # that any recorded entry is well-formed hex.
         for rec in client.recent_multisync:
@@ -196,21 +194,13 @@ class TestPresenceReportDecode:
 
     def test_presence_frame_emits_trista_1(self):
         # Modeled on the #840 capture: detected=1, distance 162cm, overall=1.
-        frame = self._frame(
-            [0xAA, 0x01, 0x01, 0x00, 0xA2, 0x01, 0x00, 0x9E]
-            + [0x00] * 8
-            + [0x01, 0x00, 0x00]
-        )
+        frame = self._frame([0xAA, 0x01, 0x01, 0x00, 0xA2, 0x01, 0x00, 0x9E] + [0x00] * 8 + [0x01, 0x00, 0x00])
         cb = self._emit_one(frame)
         cb.assert_called_once_with(HUB_ID, {"triSta": 1})
 
     def test_absence_frame_emits_trista_0(self):
         # Absence: detected flags cleared, distances persist (last known).
-        frame = self._frame(
-            [0xAA, 0x01, 0x00, 0x00, 0x99, 0x01, 0x00, 0x99]
-            + [0x00] * 8
-            + [0x00, 0x00, 0x00]
-        )
+        frame = self._frame([0xAA, 0x01, 0x00, 0x00, 0x99, 0x01, 0x00, 0x99] + [0x00] * 8 + [0x00, 0x00, 0x00])
         cb = self._emit_one(frame)
         cb.assert_called_once_with(HUB_ID, {"triSta": 0})
 
@@ -236,9 +226,7 @@ class TestPerDeviceReceiveTimestamp:
 
     def _state_msg(self, device_id: str) -> MagicMock:
         msg = MagicMock()
-        msg.payload = json.dumps(
-            {"device": device_id, "sku": "H6072", "state": {"onOff": 1}}
-        ).encode()
+        msg.payload = json.dumps({"device": device_id, "sku": "H6072", "state": {"onOff": 1}}).encode()
         return msg
 
     def test_none_before_any_message(self):
@@ -350,9 +338,7 @@ class TestThermoFrameDecode:
         that reads too broadly would silence leak detection — the one failure
         this decode must never cause.
         """
-        event = self._decode_one(
-            bytes.fromhex("ee34000200641e14ad6a1f4a58000103018000ff")
-        )
+        event = self._decode_one(bytes.fromhex("ee34000200641e14ad6a1f4a58000103018000ff"))
         assert event["_leak_event"] is True
         assert event.get("_thermo_frame") is None
         assert event["is_wet"] is True
@@ -373,15 +359,11 @@ class TestThermoFrameDecode:
         cb = MagicMock()
         client = _make_client()
         client._on_state_update = cb
-        client._handle_multisync(
-            HUB_ID, _multisync([bytes.fromhex("ee34000800642915")])
-        )
+        client._handle_multisync(HUB_ID, _multisync([bytes.fromhex("ee34000800642915")]))
         assert cb.call_count == 0
 
     def test_thermo_frames_still_recorded_for_diagnostics(self):
         """Diverting the frame must not drop it from the ring buffer."""
         client = _make_client()
-        client._handle_multisync(
-            HUB_ID, _multisync([bytes.fromhex(self.LABELLED[0][0])])
-        )
+        client._handle_multisync(HUB_ID, _multisync([bytes.fromhex(self.LABELLED[0][0])]))
         assert [rec["header"] for rec in client.recent_multisync] == ["ee34"]

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Languages shipped alongside the integration. Add a new file under
 # ``custom_components/govee/translations/<code>.json`` and append its code
 # here to make every structural and placeholder test cover it.
@@ -119,9 +118,7 @@ def test_translation_has_no_extra_keys(lang: str, strings_keys: set[str]) -> Non
     assert path.exists(), f"Missing translation file: {path}"
 
     extra = _get_keys(_load_json(path)) - strings_keys
-    assert (
-        not extra
-    ), f"Keys in translations/{lang}.json not in strings.json:\n  {sorted(extra)}"
+    assert not extra, f"Keys in translations/{lang}.json not in strings.json:\n  {sorted(extra)}"
 
 
 def test_en_translation_has_every_key(strings_keys: set[str]) -> None:
@@ -137,9 +134,7 @@ def test_en_translation_has_every_key(strings_keys: set[str]) -> None:
     translation_keys = _get_keys(_load_json(_base_dir() / "translations" / "en.json"))
 
     missing = strings_keys - translation_keys
-    assert (
-        not missing
-    ), f"Keys in strings.json missing from translations/en.json:\n  {sorted(missing)}"
+    assert not missing, f"Keys in strings.json missing from translations/en.json:\n  {sorted(missing)}"
 
 
 @pytest.mark.parametrize("lang", LANGUAGES)
@@ -155,10 +150,7 @@ def test_translation_values_are_non_empty(lang: str) -> None:
     assert path.exists(), f"Missing translation file: {path}"
 
     empty_keys: list[str] = _find_empty_leaf_paths(_load_json(path))
-    assert not empty_keys, (
-        f"Empty/whitespace-only translated strings in translations/{lang}.json: "
-        f"{empty_keys}"
-    )
+    assert not empty_keys, f"Empty/whitespace-only translated strings in translations/{lang}.json: " f"{empty_keys}"
 
 
 @pytest.mark.parametrize("lang", LANGUAGES)
@@ -199,6 +191,32 @@ def test_translation_preserves_placeholders(
                 f"    source:     {source_text!r}\n"
                 f"    translated: {translated[key]!r}"
             )
+
+    assert not mismatches, f"Placeholder drift in translations/{lang}.json:\n" + "\n".join(mismatches)
+
+
+@pytest.mark.parametrize("lang", ("strings", *LANGUAGES))
+def test_repair_issues_follow_the_hassfest_schema(lang: str) -> None:
+    """Every repair issue has a title and exactly one of ``description`` or ``fix_flow``.
+
+    hassfest rejects an issue that carries both: a fixable issue explains
+    itself in its fix flow's step description, a non-fixable one in
+    ``description``. A fix flow needs at least one step.
+    """
+    path = _base_dir() / ("strings.json" if lang == "strings" else f"translations/{lang}.json")
+    data = _load_json(path)
+    assert isinstance(data, dict)
+
+    for issue_id, issue in data.get("issues", {}).items():
+        assert isinstance(issue, dict), f"{path}: issues.{issue_id} must be an object"
+        assert "title" in issue, f"{path}: issues.{issue_id} has no title"
+        has_description = "description" in issue
+        has_fix_flow = "fix_flow" in issue
+        assert has_description != has_fix_flow, (
+            f"{path}: issues.{issue_id} must have exactly one of description or fix_flow, " f"got {sorted(issue)}"
+        )
+        if has_fix_flow:
+            assert issue["fix_flow"].get("step"), f"{path}: issues.{issue_id}.fix_flow has no step"
 
 
 # ---------------------------------------------------------------------------

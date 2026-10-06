@@ -186,10 +186,13 @@ class TestMainLightTurnOff:
 
     @pytest.mark.asyncio
     async def test_turn_off_skips_reassert_when_command_fails(self):
+        from homeassistant.exceptions import HomeAssistantError
+
         entity = _make_main_light_entity(color_temp_kelvin=4000)
         entity.coordinator.async_control_device = AsyncMock(return_value=False)
 
-        await entity.async_turn_off()
+        with pytest.raises(HomeAssistantError):
+            await entity.async_turn_off()
 
         entity.coordinator.async_reassert_segments.assert_not_awaited()
 
@@ -265,9 +268,7 @@ class TestMainLightTurnOn:
 
         await entity.async_turn_on(color_temp_kelvin=4000)
 
-        entity.coordinator.async_reassert_segments.assert_awaited_once_with(
-            "AA:BB:CC:DD:EE:FF:00:11"
-        )
+        entity.coordinator.async_reassert_segments.assert_awaited_once_with("AA:BB:CC:DD:EE:FF:00:11")
 
     @pytest.mark.asyncio
     async def test_turn_on_when_already_on_does_not_force_a_colour(self):
@@ -340,8 +341,7 @@ class TestSegmentReassert:
 
         assert coord.async_control_device.await_count == 2
         by_colour = {
-            c[0][1].color.as_tuple: c[0][1].segment_indices
-            for c in coord.async_control_device.await_args_list
+            c[0][1].color.as_tuple: c[0][1].segment_indices for c in coord.async_control_device.await_args_list
         }
         assert by_colour[(255, 0, 0)] == tuple(range(6))
         assert by_colour[(0, 0, 255)] == tuple(range(6, 12))

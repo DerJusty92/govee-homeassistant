@@ -27,16 +27,10 @@ class TestBleAddressFromDeviceId:
     """Cloud device IDs carry the BLE MAC with two extra leading octets."""
 
     def test_strips_the_two_leading_octets(self):
-        assert (
-            ble_address_from_device_id("11:66:C0:EB:32:C1:19:FC")
-            == "C0:EB:32:C1:19:FC"
-        )
+        assert ble_address_from_device_id("11:66:C0:EB:32:C1:19:FC") == "C0:EB:32:C1:19:FC"
 
     def test_uppercases_the_address(self):
-        assert (
-            ble_address_from_device_id("11:66:c0:eb:32:c1:19:fc")
-            == "C0:EB:32:C1:19:FC"
-        )
+        assert ble_address_from_device_id("11:66:c0:eb:32:c1:19:fc") == "C0:EB:32:C1:19:FC"
 
     def test_plain_mac_is_returned_unchanged(self):
         assert ble_address_from_device_id("C0:EB:32:C1:19:FC") == "C0:EB:32:C1:19:FC"
@@ -64,11 +58,12 @@ def _bluetooth(handler, *, found=None, side_effect=None):
         bt.async_last_service_info.side_effect = side_effect
     else:
         bt.async_last_service_info.return_value = found
-    with patch(f"{_MODULE}.HAS_BLUETOOTH", True), patch(
-        f"{_MODULE}.bt_component", bt, create=True
-    ), patch(
-        f"{_MODULE}.BLE_COMMAND_SUPPORTED_MODELS", frozenset({"H1270"}), create=True
-    ), patch.object(handler, "handle_advertisement") as handle:
+    with (
+        patch(f"{_MODULE}.HAS_BLUETOOTH", True),
+        patch(f"{_MODULE}.bt_component", bt, create=True),
+        patch(f"{_MODULE}.BLE_COMMAND_SUPPORTED_MODELS", frozenset({"H1270"}), create=True),
+        patch.object(handler, "handle_advertisement") as handle,
+    ):
         yield bt, handle
 
 
@@ -142,9 +137,7 @@ class TestEnrollFromCache:
         """Installs without HA Bluetooth must be unaffected."""
         handler = BleAdvertisementHandler(_coordinator())
 
-        with patch(f"{_MODULE}.HAS_BLUETOOTH", False), patch.object(
-            handler, "handle_advertisement"
-        ) as handle:
+        with patch(f"{_MODULE}.HAS_BLUETOOTH", False), patch.object(handler, "handle_advertisement") as handle:
             handler.enroll_from_cache()  # must not raise
 
         handle.assert_not_called()

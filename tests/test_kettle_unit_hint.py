@@ -52,12 +52,7 @@ class TestKettleUnitHint:
 
         # "auto" + a device that says Fahrenheit -> the entity converts F->C
         # once, rather than treating the value as Celsius and converting up.
-        assert (
-            resolve_fahrenheit_conversion(
-                "H7170", "auto", state.device_temperature_unit
-            )
-            is True
-        )
+        assert resolve_fahrenheit_conversion("H7170", "auto", state.device_temperature_unit) is True
         converted = (float(state.sensor_temperature) - 32.0) * (5.0 / 9.0)
         assert abs(converted - 25.0) < 0.1  # 77 °F == 25 °C
 
@@ -109,9 +104,4 @@ class TestKettleUnitHint:
                 }
             ]
         )
-        assert (
-            resolve_fahrenheit_conversion(
-                "H717A", "auto", state.device_temperature_unit
-            )
-            is False
-        )
+        assert resolve_fahrenheit_conversion("H717A", "auto", state.device_temperature_unit) is False
